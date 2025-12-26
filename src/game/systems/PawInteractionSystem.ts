@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { World, Entity } from '../World';
 import { InputSystem } from './InputSystem';
 import { AnimationSystem } from './AnimationSystem';
+import { PhysicsSystem } from './PhysicsSystem';
 
 export interface PawSwipeEvent {
   side: 'left' | 'right';
@@ -10,17 +11,44 @@ export interface PawSwipeEvent {
   direction: THREE.Vector3;
 }
 
+enum SwipeState {
+  Idle,
+  Startup,   // 0ms - 75ms: startup before hit window
+  Active,    // 75ms - 250ms: active hit detection window
+  Recovery   // After 250ms: cooldown
+}
+
+interface SwipeTracker {
+  state: SwipeState;
+  timer: number;
+  hitDetected: boolean;
+}
+
 export class PawInteractionSystem {
   private world: World;
+  private physics: PhysicsSystem | null = null;
   private swipeRange: number = 1.5;
-  private swipeActiveTime: number = 0.25;
-  private leftSwipeTimer: number = 0;
-  private rightSwipeTimer: number = 0;
+  
+  // State machine timing (all in seconds)
+  private swipeStartupTime: number = 0.075;  // 75ms startup
+  private swipeActiveTime: number = 0.175;   // 175ms active window (75-250ms)
+  private swipeRecoveryTime: number = 0.1;   // 100ms recovery
+  
+  private leftSwipe: SwipeTracker = { state: SwipeState.Idle, timer: 0, hitDetected: false };
+  private rightSwipe: SwipeTracker = { state: SwipeState.Idle, timer: 0, hitDetected: false };
+  
   private leftPawCollider: THREE.Sphere | null = null;
   private rightPawCollider: THREE.Sphere | null = null;
+  
+  // Track entities hit during current swipe to prevent double-hits
+  private entitiesHitThisSwipe: Set<Entity> = new Set();
 
   constructor(world: World) {
     this.world = world;
+  }
+  
+  public setPhysics(physics: PhysicsSystem): void {
+    this.physics = physics;
   }
 
   public update(deltaTime: number, input: InputSystem, animation: AnimationSystem): void {
@@ -32,63 +60,93 @@ export class PawInteractionSystem {
 
     if (!leftPaw || !rightPaw) return;
 
-    // Update swipe timers
-    if (this.leftSwipeTimer > 0) {
-      this.leftSwipeTimer -= deltaTime;
-    }
-    if (this.rightSwipeTimer > 0) {
-      this.rightSwipeTimer -= deltaTime;
-    }
-
-    // Handle left paw swipe
-    if (input.state.leftPawPressed && !animation.isAnimating(leftPaw)) {
-      this.leftSwipeTimer = this.swipeActiveTime;
-      
-      // Play animation
-      animation.playLeftPawSwipe(leftPaw, () => {
-        // Animation complete
-      });
-      
-      // Check for hits during swipe
-      setTimeout(() => {
-        const event = this.performSwipe(player, 'left', leftPaw);
-        if (event.target) {
-          this.handleSwipeInteraction(event);
-        }
-      }, 75); // Hit detection at peak of swipe
-    }
-
-    // Handle right paw swipe
-    if (input.state.rightPawPressed && !animation.isAnimating(rightPaw)) {
-      this.rightSwipeTimer = this.swipeActiveTime;
-      
-      // Play animation
-      animation.playRightPawSwipe(rightPaw, () => {
-        // Animation complete
-      });
-      
-      // Check for hits during swipe
-      setTimeout(() => {
-        const event = this.performSwipe(player, 'right', rightPaw);
-        if (event.target) {
-          this.handleSwipeInteraction(event);
-        }
-      }, 75); // Hit detection at peak of swipe
-    }
-
-    // Update paw colliders for continuous physics
+    // Update paw colliders every frame
     this.updatePawColliders(player, leftPaw, rightPaw);
-    
-    // Check for paw collisions with objects
-    if (this.leftSwipeTimer > 0) {
-      this.checkPawCollisions(player, leftPaw, 'left');
-    }
-    if (this.rightSwipeTimer > 0) {
-      this.checkPawCollisions(player, rightPaw, 'right');
-    }
+
+    // Handle left paw swipe state machine
+    this.updateSwipeStateMachine(
+      this.leftSwipe,
+      input.state.leftPawPressed,
+      animation.isAnimating(leftPaw),
+      deltaTime,
+      player,
+      leftPaw,
+      'left',
+      animation
+    );
+
+    // Handle right paw swipe state machine
+    this.updateSwipeStateMachine(
+      this.rightSwipe,
+      input.state.rightPawPressed,
+      animation.isAnimating(rightPaw),
+      deltaTime,
+      player,
+      rightPaw,
+      'right',
+      animation
+    );
 
     // Update prompt display
     this.updatePromptDisplay(player);
+  }
+
+  private updateSwipeStateMachine(
+    swipe: SwipeTracker,
+    inputPressed: boolean,
+    isAnimating: boolean,
+    deltaTime: number,
+    player: Entity,
+    paw: THREE.Group,
+    side: 'left' | 'right',
+    animation: AnimationSystem
+  ): void {
+    switch (swipe.state) {
+      case SwipeState.Idle:
+        if (inputPressed && !isAnimating) {
+          // Start swipe
+          swipe.state = SwipeState.Startup;
+          swipe.timer = 0;
+          swipe.hitDetected = false;
+          this.entitiesHitThisSwipe.clear();
+          
+          // Play animation
+          if (side === 'left') {
+            animation.playLeftPawSwipe(paw, () => {});
+          } else {
+            animation.playRightPawSwipe(paw, () => {});
+          }
+        }
+        break;
+
+      case SwipeState.Startup:
+        swipe.timer += deltaTime;
+        if (swipe.timer >= this.swipeStartupTime) {
+          swipe.state = SwipeState.Active;
+        }
+        break;
+
+      case SwipeState.Active:
+        swipe.timer += deltaTime;
+        
+        // Perform collision detection during active window
+        if (!swipe.hitDetected) {
+          this.checkPawCollisions(player, paw, side);
+        }
+        
+        if (swipe.timer >= this.swipeStartupTime + this.swipeActiveTime) {
+          swipe.state = SwipeState.Recovery;
+        }
+        break;
+
+      case SwipeState.Recovery:
+        swipe.timer += deltaTime;
+        if (swipe.timer >= this.swipeStartupTime + this.swipeActiveTime + this.swipeRecoveryTime) {
+          swipe.state = SwipeState.Idle;
+          swipe.timer = 0;
+        }
+        break;
+    }
   }
 
   private updatePawColliders(_player: Entity, leftPaw: THREE.Group, rightPaw: THREE.Group): void {
@@ -112,82 +170,30 @@ export class PawInteractionSystem {
     for (const [, entity] of this.world.getAllEntities()) {
       if (entity === player || !this.isInteractable(entity)) continue;
       
+      // Skip if already hit this swipe
+      if (this.entitiesHitThisSwipe.has(entity)) continue;
+      
       // Simple sphere-to-object collision
       const distance = collider.center.distanceTo(entity.position);
       
       if (distance < collider.radius + 0.3) {
-        // Hit! Apply physics impulse
-        if (entity.type === 'knockable' && !entity.data?.hitThisSwipe) {
-          // Get direction from paw to object
-          const direction = new THREE.Vector3().subVectors(entity.position, collider.center).normalize();
-          
-          // Apply stronger impulse
-          if (!entity.velocity) entity.velocity = new THREE.Vector3();
-          
-          const impulse = direction.multiplyScalar(8);
-          impulse.y = 3; // Add upward component
-          entity.velocity.add(impulse);
-          
-          // Mark as hit this swipe
-          if (!entity.data) entity.data = {};
-          entity.data.hitThisSwipe = true;
-          
-          // Clear the flag after a short time
-          setTimeout(() => {
-            if (entity.data) {
-              entity.data.hitThisSwipe = false;
-            }
-          }, 300);
-          
-          // Mark as knocked for scoring
-          if (!entity.data.knocked) {
-            entity.data.knocked = true;
-            this.dispatchTaskEvent('knock', entity);
-            this.awardPoints(10);
-          }
-        }
+        // Hit detected!
+        this.entitiesHitThisSwipe.add(entity);
+        
+        // Get direction from paw to object
+        const direction = new THREE.Vector3().subVectors(entity.position, collider.center).normalize();
+        
+        // Handle interaction based on entity type
+        const event: PawSwipeEvent = {
+          side,
+          target: entity,
+          position: collider.center.clone(),
+          direction
+        };
+        
+        this.handleSwipeInteraction(event);
       }
     }
-  }
-
-  private performSwipe(player: Entity, side: 'left' | 'right', paw: THREE.Group): PawSwipeEvent {
-    // Calculate swipe position and direction
-    // Model forward is +X axis
-    const forward = new THREE.Vector3(1, 0, 0);
-    forward.applyEuler(player.rotation);
-
-    // Get world position of the paw
-    const pawWorldPos = new THREE.Vector3();
-    paw.getWorldPosition(pawWorldPos);
-
-    // Find targets in range
-    const target = this.findSwipeTarget(pawWorldPos, player);
-
-    return {
-      side,
-      target,
-      position: pawWorldPos,
-      direction: forward
-    };
-  }
-
-  private findSwipeTarget(origin: THREE.Vector3, player: Entity): Entity | null {
-    let closestTarget: Entity | null = null;
-    let closestDistance = this.swipeRange;
-
-    for (const [, entity] of this.world.getAllEntities()) {
-      if (entity === player) continue;
-      if (entity.type === 'floor') continue;
-
-      const distance = origin.distanceTo(entity.position);
-      
-      if (distance < closestDistance && this.isInteractable(entity)) {
-        closestTarget = entity;
-        closestDistance = distance;
-      }
-    }
-
-    return closestTarget;
   }
 
   private isInteractable(entity: Entity): boolean {
@@ -219,27 +225,32 @@ export class PawInteractionSystem {
   }
 
   private handleKnock(target: Entity, event: PawSwipeEvent): void {
-    if (!target.velocity) target.velocity = new THREE.Vector3();
     if (!target.data) target.data = {};
 
-    // Apply impulse
-    const impulse = event.direction.clone().multiplyScalar(5);
-    impulse.y = 2;
-    target.velocity.add(impulse);
-
-    // Mark as knocked
-    if (!target.data.knocked) {
-      target.data.knocked = true;
+    // Apply impulse via Rapier if physics body exists
+    if (target.physicsBody && this.physics) {
+      const impulseStrength = 5.0;
+      const impulse = event.direction.clone().multiplyScalar(impulseStrength);
+      impulse.y += 2.5; // Add upward component
       
-      // Dispatch event to task system
-      this.dispatchTaskEvent('knock', target);
-      
-      // Award points
-      this.awardPoints(10);
+      target.physicsBody.applyImpulse(
+        { x: impulse.x, y: impulse.y, z: impulse.z },
+        true
+      );
+    } else {
+      // Fallback for entities without physics bodies
+      if (!target.velocity) target.velocity = new THREE.Vector3();
+      const impulse = event.direction.clone().multiplyScalar(8);
+      impulse.y = 3;
+      target.velocity.add(impulse);
     }
 
-    // Apply physics-like movement
-    this.applyVelocityToEntity(target);
+    // Mark as knocked for scoring (only once)
+    if (!target.data.knocked) {
+      target.data.knocked = true;
+      this.dispatchTaskEvent('knock', target);
+      this.awardPoints(10);
+    }
   }
 
   private handleScratch(target: Entity, _event: PawSwipeEvent): void {
@@ -298,23 +309,6 @@ export class PawInteractionSystem {
     return null;
   }
 
-  private applyVelocityToEntity(entity: Entity): void {
-    if (!entity.velocity) return;
-
-    // Simple physics
-    entity.position.add(entity.velocity.clone().multiplyScalar(0.016));
-    entity.velocity.y -= 9.8 * 0.016;
-    entity.velocity.multiplyScalar(0.95); // Damping
-
-    // Floor collision
-    if (entity.position.y < 0.15) {
-      entity.position.y = 0.15;
-      entity.velocity.y *= -0.3; // Bounce
-      entity.velocity.x *= 0.8;
-      entity.velocity.z *= 0.8;
-    }
-  }
-
   private updatePromptDisplay(player: Entity): void {
     const promptElement = document.getElementById('prompt-display');
     if (!promptElement) return;
@@ -349,7 +343,8 @@ export class PawInteractionSystem {
 
   private findNearestInteractable(player: Entity): Entity | null {
     let nearest: Entity | null = null;
-    let nearestDist = 2.0;
+    // Slightly more generous than strict swipe range so prompts appear before you're perfectly in range
+    let nearestDist = this.swipeRange + 0.5;
 
     for (const [_id, entity] of this.world.getAllEntities()) {
       if (entity === player || !this.isInteractable(entity)) continue;
@@ -376,4 +371,3 @@ export class PawInteractionSystem {
     }));
   }
 }
-

@@ -1,14 +1,119 @@
 import * as THREE from 'three';
 import { World, Entity } from './World';
 import { createToonMaterial } from './materials/ToonMaterial';
+import type { PhysicsSystem } from './systems/PhysicsSystem';
+import {
+  createBoxCollider,
+  createSphereCollider,
+  createCylinderCollider,
+  CollisionGroup
+} from './physics/Physics';
+
+// Physics kind enum
+export enum PhysicsKind {
+  StaticCollider,
+  DynamicProp,
+  DynamicLightFurniture
+}
+
+// Helper to register physics for an entity
+export function registerPhysics(
+  _world: World,
+  physics: PhysicsSystem,
+  entity: Entity,
+  entityId: string,
+  physicsKind: PhysicsKind,
+  geometryInfo?: { type: 'box' | 'sphere' | 'cylinder'; geometry: any }
+): void {
+  if (!physics.isReady() || !physics.getWorld()) {
+    console.warn('Physics not ready, skipping registration for', entityId);
+    return;
+  }
+
+  const rapierWorld = physics.getWorld()!;
+  const isStatic = physicsKind === PhysicsKind.StaticCollider;
+  
+  // Determine collision groups
+  let collisionGroup = CollisionGroup.Static;
+  let collisionMask = CollisionGroup.All;
+  
+  if (physicsKind === PhysicsKind.DynamicProp) {
+    collisionGroup = CollisionGroup.Props;
+  } else if (physicsKind === PhysicsKind.DynamicLightFurniture) {
+    collisionGroup = CollisionGroup.Furniture;
+  }
+
+  // Create collider based on geometry type
+  if (geometryInfo) {
+    let handle;
+    
+    switch (geometryInfo.type) {
+      case 'box':
+        handle = createBoxCollider(
+          rapierWorld,
+          geometryInfo.geometry,
+          entity.position,
+          entity.rotation,
+          isStatic,
+          collisionGroup,
+          collisionMask
+        );
+        break;
+      case 'sphere':
+        handle = createSphereCollider(
+          rapierWorld,
+          geometryInfo.geometry,
+          entity.position,
+          entity.rotation,
+          isStatic,
+          collisionGroup,
+          collisionMask
+        );
+        break;
+      case 'cylinder':
+        handle = createCylinderCollider(
+          rapierWorld,
+          geometryInfo.geometry,
+          entity.position,
+          entity.rotation,
+          isStatic,
+          collisionGroup,
+          collisionMask
+        );
+        break;
+    }
+
+    if (handle) {
+      physics.registerRigidBody(entityId, handle.rigidBody, handle.collider);
+      entity.physicsBody = handle.rigidBody;
+      
+      // Set material properties based on type
+      if (physicsKind === PhysicsKind.DynamicProp) {
+        handle.collider.setFriction(0.5);
+        handle.collider.setRestitution(0.2);
+        handle.rigidBody.setAdditionalMass(0.5, true);
+      } else if (physicsKind === PhysicsKind.DynamicLightFurniture) {
+        handle.collider.setFriction(0.7);
+        handle.collider.setRestitution(0.1);
+        handle.rigidBody.setAdditionalMass(5.0, true);
+      } else {
+        handle.collider.setFriction(0.8);
+        handle.collider.setRestitution(0.0);
+      }
+    }
+  }
+}
+
+import { getRandom } from './utils/rng';
 
 /**
  * Builds a complete, lived-in house with furniture, decor, and interactables
  */
-export function buildHouse(world: World): void {
+export function buildHouse(world: World, _physics: PhysicsSystem): void {
   // Create base structure
   createFloor(world);
   createWalls(world);
+  createDoorway(world);
   createWindows(world);
   createCeiling(world);
   
@@ -22,11 +127,12 @@ export function buildHouse(world: World): void {
 }
 
 /**
- * Creates the floor with a nice wood texture
+ * Creates the floor with wood and tiled zones
  */
 function createFloor(world: World): void {
+  // Main wood floor - warmer tone
   const floorGeometry = new THREE.PlaneGeometry(30, 30);
-  const floorMaterial = createToonMaterial(0xd4a574);
+  const floorMaterial = createToonMaterial(0xdaa76e); // Warmer wood
   const floor = new THREE.Mesh(floorGeometry, floorMaterial);
   floor.rotation.x = -Math.PI / 2;
   floor.receiveShadow = true;
@@ -39,41 +145,88 @@ function createFloor(world: World): void {
     type: 'floor'
   };
   world.addEntity('floor', entity);
+  
+  // Kitchen tile zone (checker pattern)
+  const tileSize = 0.5;
+  const tilesX = 8;
+  const tilesZ = 10;
+  const kitchenStartX = 4;
+  const kitchenStartZ = -4;
+  
+  for (let x = 0; x < tilesX; x++) {
+    for (let z = 0; z < tilesZ; z++) {
+      // Alternating checker pattern
+      const isLight = (x + z) % 2 === 0;
+      const tileColor = isLight ? 0xe8e8e8 : 0xd0d0d0;
+      
+      const tile = new THREE.Mesh(
+        new THREE.PlaneGeometry(tileSize, tileSize),
+        createToonMaterial(tileColor)
+      );
+      tile.rotation.x = -Math.PI / 2;
+      tile.position.set(
+        kitchenStartX + x * tileSize,
+        0.01, // Slightly above main floor
+        kitchenStartZ + z * tileSize
+      );
+      tile.receiveShadow = true;
+      world.scene.add(tile);
+    }
+  }
 }
 
 /**
- * Creates walls with baseboards
+ * Creates walls with baseboards and accent colors
  */
 function createWalls(world: World): void {
-  const wallMaterial = createToonMaterial(0xffe6b3);
+  const wallMaterial = createToonMaterial(0xffe6b3); // Warm cream
+  const accentWallMaterial = createToonMaterial(0x9acd32); // Green accent like reference
   const wallHeight = 5;
   
   // Back wall
-  const backWall = new THREE.Mesh(
-    new THREE.BoxGeometry(15, wallHeight, 0.3),
-    wallMaterial
-  );
+  const backWallGeometry = new THREE.BoxGeometry(15, wallHeight, 0.3);
+  const backWall = new THREE.Mesh(backWallGeometry, wallMaterial);
   backWall.position.set(0, wallHeight / 2, -7.5);
   backWall.receiveShadow = true;
   world.scene.add(backWall);
   
-  // Left wall
-  const leftWall = new THREE.Mesh(
-    new THREE.BoxGeometry(0.3, wallHeight, 15),
-    wallMaterial
-  );
+  const backWallEntity: Entity = {
+    mesh: backWall,
+    position: backWall.position,
+    rotation: backWall.rotation,
+    type: 'wall'
+  };
+  world.addEntity('back_wall', backWallEntity);
+  
+  // Left wall - GREEN ACCENT WALL
+  const leftWallGeometry = new THREE.BoxGeometry(0.3, wallHeight, 15);
+  const leftWall = new THREE.Mesh(leftWallGeometry, accentWallMaterial);
   leftWall.position.set(-7.5, wallHeight / 2, 0);
   leftWall.receiveShadow = true;
   world.scene.add(leftWall);
   
+  const leftWallEntity: Entity = {
+    mesh: leftWall,
+    position: leftWall.position,
+    rotation: leftWall.rotation,
+    type: 'wall'
+  };
+  world.addEntity('left_wall', leftWallEntity);
+  
   // Right wall
-  const rightWall = new THREE.Mesh(
-    new THREE.BoxGeometry(0.3, wallHeight, 15),
-    wallMaterial
-  );
+  const rightWallGeometry = new THREE.BoxGeometry(0.3, wallHeight, 15);
+  const rightWall = new THREE.Mesh(rightWallGeometry, wallMaterial);
   rightWall.position.set(7.5, wallHeight / 2, 0);
   rightWall.receiveShadow = true;
   world.scene.add(rightWall);
+  
+  const rightWallEntity: Entity = {
+    mesh: rightWall,
+    position: rightWall.position,
+    rotation: rightWall.rotation,
+    type: 'wall'
+  };
+  world.addEntity('right_wall', rightWallEntity);
   
   // Add baseboards
   addBaseboards(world);
@@ -113,153 +266,359 @@ function addBaseboards(world: World): void {
 }
 
 /**
- * Creates windows with outdoor views
+ * Creates a framed doorway/entry with glass door
+ */
+function createDoorway(world: World): void {
+  // Door frame (thick trim around opening)
+  const frameMaterial = createToonMaterial(0xffffff);
+  const frameThickness = 0.15;
+  const doorWidth = 2.2;
+  const doorHeight = 4.2;
+  
+  // Top frame piece
+  const topFrame = new THREE.Mesh(
+    new THREE.BoxGeometry(doorWidth + frameThickness * 2, frameThickness, frameThickness),
+    frameMaterial
+  );
+  topFrame.position.set(0, doorHeight, 7.4);
+  world.scene.add(topFrame);
+  
+  // Left frame piece
+  const leftFrame = new THREE.Mesh(
+    new THREE.BoxGeometry(frameThickness, doorHeight, frameThickness),
+    frameMaterial
+  );
+  leftFrame.position.set(-doorWidth / 2 - frameThickness / 2, doorHeight / 2, 7.4);
+  world.scene.add(leftFrame);
+  
+  // Right frame piece
+  const rightFrame = new THREE.Mesh(
+    new THREE.BoxGeometry(frameThickness, doorHeight, frameThickness),
+    frameMaterial
+  );
+  rightFrame.position.set(doorWidth / 2 + frameThickness / 2, doorHeight / 2, 7.4);
+  world.scene.add(rightFrame);
+  
+  // Glass door panels with frame grid
+  const doorPanelMaterial = new THREE.MeshToonMaterial({
+    color: 0xaaddff,
+    transparent: true,
+    opacity: 0.4
+  });
+  
+  // Create 6 glass panels (2 columns x 3 rows) like reference
+  const panelWidth = (doorWidth - 0.3) / 2;
+  const panelHeight = (doorHeight - 0.4) / 3;
+  
+  for (let col = 0; col < 2; col++) {
+    for (let row = 0; row < 3; row++) {
+      const panel = new THREE.Mesh(
+        new THREE.PlaneGeometry(panelWidth - 0.05, panelHeight - 0.05),
+        doorPanelMaterial
+      );
+      const xOffset = -doorWidth / 4 + col * (doorWidth / 2);
+      const yOffset = panelHeight / 2 + 0.2 + row * panelHeight;
+      panel.position.set(xOffset, yOffset, 7.45);
+      world.scene.add(panel);
+    }
+  }
+  
+  // Door frame grid (thin dividers)
+  const dividerMaterial = createToonMaterial(0xe0e0e0);
+  
+  // Vertical center divider
+  const verticalDivider = new THREE.Mesh(
+    new THREE.BoxGeometry(0.06, doorHeight - 0.2, 0.08),
+    dividerMaterial
+  );
+  verticalDivider.position.set(0, doorHeight / 2, 7.45);
+  world.scene.add(verticalDivider);
+  
+  // Horizontal dividers
+  for (let i = 1; i < 3; i++) {
+    const horizontalDivider = new THREE.Mesh(
+      new THREE.BoxGeometry(doorWidth - 0.2, 0.06, 0.08),
+      dividerMaterial
+    );
+    horizontalDivider.position.set(0, i * (doorHeight / 3), 7.45);
+    world.scene.add(horizontalDivider);
+  }
+  
+  // Door handle
+  const handleMaterial = createToonMaterial(0xb8860b);
+  const handle = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.04, 0.04, 0.3),
+    handleMaterial
+  );
+  handle.rotation.z = Math.PI / 2;
+  handle.position.set(0.8, 2.0, 7.5);
+  world.scene.add(handle);
+}
+
+/**
+ * Creates windows with outdoor views - UPGRADED with thicker frames and sills
  */
 function createWindows(world: World): void {
-  const windowFrameMaterial = createToonMaterial(0xffffff);
+  const windowFrameMaterial = createToonMaterial(0xf5f5f5);
   const glassMaterial = new THREE.MeshToonMaterial({
     color: 0x87ceeb,
     transparent: true,
-    opacity: 0.3
+    opacity: 0.25
   });
   
   // Create 3 windows on the back wall
   const windowPositions = [-4, 0, 4];
+  const windowWidth = 2.0;
+  const windowHeight = 2.4;
   
   windowPositions.forEach((x, index) => {
     const windowGroup = new THREE.Group();
     
-    // Frame
-    const frame = new THREE.Mesh(
-      new THREE.BoxGeometry(1.8, 2.2, 0.15),
+    // Outer frame (thick) 
+    const outerFrame = new THREE.Mesh(
+      new THREE.BoxGeometry(windowWidth + 0.3, windowHeight + 0.3, 0.2),
       windowFrameMaterial
     );
-    windowGroup.add(frame);
+    windowGroup.add(outerFrame);
+    
+    // Window sill (bottom ledge)
+    const sill = new THREE.Mesh(
+      new THREE.BoxGeometry(windowWidth + 0.4, 0.15, 0.25),
+      windowFrameMaterial
+    );
+    sill.position.set(0, -(windowHeight + 0.3) / 2 - 0.075, 0.025);
+    windowGroup.add(sill);
     
     // Glass panes (4 panes per window)
+    const paneWidth = (windowWidth - 0.15) / 2;
+    const paneHeight = (windowHeight - 0.15) / 2;
+    
     for (let row = 0; row < 2; row++) {
       for (let col = 0; col < 2; col++) {
         const pane = new THREE.Mesh(
-          new THREE.PlaneGeometry(0.8, 1.0),
+          new THREE.PlaneGeometry(paneWidth - 0.05, paneHeight - 0.05),
           glassMaterial
         );
-        pane.position.set(-0.4 + col * 0.9, -0.5 + row * 1.1, 0.1);
+        const xOff = -paneWidth / 2 + col * (paneWidth + 0.05);
+        const yOff = -paneHeight / 2 + row * (paneHeight + 0.05);
+        pane.position.set(xOff, yOff, 0.12);
         windowGroup.add(pane);
       }
     }
     
-    // Window dividers
+    // Window dividers/mullions (thicker)
     const dividerMaterial = createToonMaterial(0xdddddd);
-    const verticalDivider = new THREE.Mesh(
-      new THREE.BoxGeometry(0.05, 2.0, 0.08),
-      dividerMaterial
-    );
-    verticalDivider.position.z = 0.1;
-    windowGroup.add(verticalDivider);
     
-    const horizontalDivider = new THREE.Mesh(
-      new THREE.BoxGeometry(1.7, 0.05, 0.08),
+    // Vertical center mullion
+    const verticalMullion = new THREE.Mesh(
+      new THREE.BoxGeometry(0.08, windowHeight - 0.2, 0.1),
       dividerMaterial
     );
-    horizontalDivider.position.z = 0.1;
-    windowGroup.add(horizontalDivider);
+    verticalMullion.position.z = 0.12;
+    windowGroup.add(verticalMullion);
+    
+    // Horizontal center mullion
+    const horizontalMullion = new THREE.Mesh(
+      new THREE.BoxGeometry(windowWidth - 0.2, 0.08, 0.1),
+      dividerMaterial
+    );
+    horizontalMullion.position.z = 0.12;
+    windowGroup.add(horizontalMullion);
     
     // Position window on wall
-    windowGroup.position.set(x, 2.5, -7.35);
+    windowGroup.position.set(x, 2.7, -7.35);
     world.scene.add(windowGroup);
     
-    // Add outdoor view cards behind windows
-    addOutdoorView(world, x, index);
+    // Add layered outdoor view behind window
+    addLayeredOutdoorView(world, x, index);
   });
 }
 
 /**
- * Adds simple "outdoor view" cards behind windows
+ * Adds layered "outdoor view" with depth (sky + far + mid + near layers)
  */
-function addOutdoorView(world: World, x: number, index: number): void {
-  const viewGroup = new THREE.Group();
-  
-  // Sky backdrop
+function addLayeredOutdoorView(world: World, x: number, index: number): void {
+  // Sky backdrop (furthest layer)
   const sky = new THREE.Mesh(
-    new THREE.PlaneGeometry(3, 3),
+    new THREE.PlaneGeometry(4, 4),
     createToonMaterial(0x87ceeb)
   );
-  sky.position.z = -8.5;
-  viewGroup.add(sky);
+  sky.position.set(x, 2.7, -9.0);
+  world.scene.add(sky);
   
-  // Add some simple outdoor elements based on window
+  // Far layer - distant elements
   if (index === 0) {
-    // Tree
-    const treeTrunk = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.1, 0.12, 0.8),
-      createToonMaterial(0x8b4513)
+    // Distant hills/trees
+    const hill = new THREE.Mesh(
+      new THREE.SphereGeometry(1.2),
+      createToonMaterial(0x6b8e23)
     );
-    treeTrunk.position.set(x - 0.5, 2.0, -8.4);
-    world.scene.add(treeTrunk);
+    hill.scale.set(1, 0.4, 1);
+    hill.position.set(x - 0.8, 1.5, -8.7);
+    world.scene.add(hill);
     
-    const treeLeaves = new THREE.Mesh(
-      new THREE.SphereGeometry(0.4),
+    const distantTree = new THREE.Mesh(
+      new THREE.SphereGeometry(0.6),
       createToonMaterial(0x228b22)
     );
-    treeLeaves.position.set(x - 0.5, 2.6, -8.4);
-    world.scene.add(treeLeaves);
+    distantTree.position.set(x + 0.9, 2.2, -8.6);
+    world.scene.add(distantTree);
   } else if (index === 1) {
-    // House in distance
+    // Distant house
     const house = new THREE.Mesh(
-      new THREE.BoxGeometry(0.6, 0.5, 0.4),
+      new THREE.BoxGeometry(0.8, 0.7, 0.6),
       createToonMaterial(0xffb3ba)
     );
-    house.position.set(x, 2.0, -8.4);
+    house.position.set(x - 0.3, 2.2, -8.5);
     world.scene.add(house);
     
     const roof = new THREE.Mesh(
-      new THREE.ConeGeometry(0.4, 0.3, 4),
+      new THREE.ConeGeometry(0.5, 0.4, 4),
       createToonMaterial(0x8b4513)
     );
     roof.rotation.y = Math.PI / 4;
-    roof.position.set(x, 2.4, -8.4);
+    roof.position.set(x - 0.3, 2.7, -8.5);
     world.scene.add(roof);
-  } else {
-    // Bushes
-    const bush1 = new THREE.Mesh(
-      new THREE.SphereGeometry(0.3),
-      createToonMaterial(0x32cd32)
-    );
-    bush1.scale.set(1, 0.7, 1);
-    bush1.position.set(x + 0.3, 1.8, -8.4);
-    world.scene.add(bush1);
     
-    const bush2 = new THREE.Mesh(
+    // Chimney
+    const chimney = new THREE.Mesh(
+      new THREE.BoxGeometry(0.15, 0.3, 0.15),
+      createToonMaterial(0xa0522d)
+    );
+    chimney.position.set(x, 2.95, -8.5);
+    world.scene.add(chimney);
+  } else {
+    // Cloud
+    const cloud1 = new THREE.Mesh(
+      new THREE.SphereGeometry(0.3),
+      createToonMaterial(0xffffff)
+    );
+    cloud1.scale.set(1.5, 0.8, 1);
+    cloud1.position.set(x + 0.5, 3.5, -8.7);
+    world.scene.add(cloud1);
+    
+    const cloud2 = new THREE.Mesh(
+      new THREE.SphereGeometry(0.25),
+      createToonMaterial(0xffffff)
+    );
+    cloud2.scale.set(1.3, 0.7, 1);
+    cloud2.position.set(x - 0.3, 3.4, -8.6);
+    world.scene.add(cloud2);
+  }
+  
+  // Mid layer - garden/yard elements
+  if (index !== 1) {
+    // Tree trunk
+    const treeTrunk = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.12, 0.15, 1.0),
+      createToonMaterial(0x8b4513)
+    );
+    const treeX = index === 0 ? x - 0.6 : x + 0.7;
+    treeTrunk.position.set(treeX, 2.0, -8.3);
+    world.scene.add(treeTrunk);
+    
+    // Tree leaves (multiple spheres for volume)
+    const leafColors = [0x228b22, 0x32cd32, 0x2e8b57];
+    for (let i = 0; i < 3; i++) {
+      const leaves = new THREE.Mesh(
+        new THREE.SphereGeometry(0.4 + i * 0.1),
+        createToonMaterial(leafColors[i % leafColors.length])
+      );
+      leaves.position.set(
+        treeX + (Math.random() - 0.5) * 0.3,
+        2.6 + i * 0.15,
+        -8.3 + (Math.random() - 0.5) * 0.2
+      );
+      world.scene.add(leaves);
+    }
+  }
+  
+  // Near layer - bushes/flowers
+  const bushCount = index === 1 ? 2 : 3;
+  for (let i = 0; i < bushCount; i++) {
+    const bush = new THREE.Mesh(
       new THREE.SphereGeometry(0.25),
       createToonMaterial(0x3cb371)
     );
-    bush2.scale.set(1, 0.7, 1);
-    bush2.position.set(x + 0.7, 1.7, -8.4);
-    world.scene.add(bush2);
+    bush.scale.set(1, 0.6, 1);
+    const bushX = x - 0.8 + i * 0.8;
+    bush.position.set(bushX, 1.6, -8.1);
+    world.scene.add(bush);
+    
+    // Add small flowers on some bushes
+    if (i % 2 === 0) {
+      const flower = new THREE.Mesh(
+        new THREE.SphereGeometry(0.06),
+        createToonMaterial(0xff69b4)
+      );
+      flower.position.set(bushX + 0.1, 1.75, -8.0);
+      world.scene.add(flower);
+    }
   }
-  
-  viewGroup.position.set(x, 2.5, 0);
-  world.scene.add(viewGroup);
 }
 
 /**
- * Adds ceiling beams/trim
+ * Adds ceiling beams/trim - REFINED with fewer, chunkier beams and perimeter trim
  */
 function createCeiling(world: World): void {
   const ceilingHeight = 5;
-  const beamMaterial = createToonMaterial(0xd2b48c);
+  const beamMaterial = createToonMaterial(0xd2b48c); // Warm wood tone
   
-  // Create a few ceiling beams for visual interest
-  const beamPositions = [-4, 0, 4];
+  // Create fewer but chunkier ceiling beams
+  const beamPositions = [-2.5, 2.5];
   beamPositions.forEach(z => {
     const beam = new THREE.Mesh(
-      new THREE.BoxGeometry(15, 0.2, 0.3),
+      new THREE.BoxGeometry(15, 0.35, 0.4),
       beamMaterial
     );
-    beam.position.set(0, ceilingHeight, z);
+    beam.position.set(0, ceilingHeight - 0.175, z);
     beam.castShadow = true;
     world.scene.add(beam);
   });
+  
+  // Add perimeter crown molding/trim
+  const trimMaterial = createToonMaterial(0xf5f5f5);
+  const trimHeight = 0.25;
+  const trimDepth = 0.2;
+  
+  // Back wall trim
+  const backTrim = new THREE.Mesh(
+    new THREE.BoxGeometry(15, trimHeight, trimDepth),
+    trimMaterial
+  );
+  backTrim.position.set(0, ceilingHeight - trimHeight / 2, -7.4);
+  world.scene.add(backTrim);
+  
+  // Front wall trim (around door)
+  const frontTrimLeft = new THREE.Mesh(
+    new THREE.BoxGeometry(5.4, trimHeight, trimDepth),
+    trimMaterial
+  );
+  frontTrimLeft.position.set(-4.8, ceilingHeight - trimHeight / 2, 7.4);
+  world.scene.add(frontTrimLeft);
+  
+  const frontTrimRight = new THREE.Mesh(
+    new THREE.BoxGeometry(5.4, trimHeight, trimDepth),
+    trimMaterial
+  );
+  frontTrimRight.position.set(4.8, ceilingHeight - trimHeight / 2, 7.4);
+  world.scene.add(frontTrimRight);
+  
+  // Left wall trim
+  const leftTrim = new THREE.Mesh(
+    new THREE.BoxGeometry(trimDepth, trimHeight, 15),
+    trimMaterial
+  );
+  leftTrim.position.set(-7.4, ceilingHeight - trimHeight / 2, 0);
+  world.scene.add(leftTrim);
+  
+  // Right wall trim
+  const rightTrim = new THREE.Mesh(
+    new THREE.BoxGeometry(trimDepth, trimHeight, 15),
+    trimMaterial
+  );
+  rightTrim.position.set(7.4, ceilingHeight - trimHeight / 2, 0);
+  world.scene.add(rightTrim);
 }
 
 /**
@@ -268,9 +627,9 @@ function createCeiling(world: World): void {
 function addLivingArea(world: World): void {
   const livingGroup = new THREE.Group();
   
-  // Couch (scratchable - will be added as entity separately)
+  // Couch (scratchable - will be added as entity separately) - positioned for foreground depth
   const couchGroup = createCouch();
-  couchGroup.position.set(-4, 0, 3);
+  couchGroup.position.set(-5, 0, 4);
   world.scene.add(couchGroup);
   
   // Register couch as scratchable entity
@@ -283,33 +642,33 @@ function addLivingArea(world: World): void {
   };
   world.addEntity('couch', couchEntity);
   
-  // Coffee table
+  // Coffee table - closer to viewer
   const coffeeTable = createCoffeeTable();
-  coffeeTable.position.set(-4, 0, 1);
+  coffeeTable.position.set(-5, 0, 2);
   world.scene.add(coffeeTable);
   
-  // Rug under coffee table
+  // Rug under coffee table - larger for depth
   const rug = new THREE.Mesh(
-    new THREE.PlaneGeometry(3, 2.5),
+    new THREE.PlaneGeometry(3.5, 3),
     createToonMaterial(0xb22222)
   );
   rug.rotation.x = -Math.PI / 2;
-  rug.position.set(-4, 0.01, 1.5);
+  rug.position.set(-5, 0.01, 2.5);
   world.scene.add(rug);
   
-  // Side table with lamp
+  // Side table with lamp - near couch
   const sideTable = createSideTable();
-  sideTable.position.set(-6.5, 0, 3);
+  sideTable.position.set(-6.8, 0, 4);
   world.scene.add(sideTable);
   
   // Lamp on side table
   const lamp = createLamp();
-  lamp.position.set(-6.5, 0.7, 3);
+  lamp.position.set(-6.8, 0.7, 4);
   world.scene.add(lamp);
   
-  // Bookshelf on left wall
+  // Bookshelf on left wall (green accent wall)
   const bookshelf = createBookshelf();
-  bookshelf.position.set(-7, 0, -3);
+  bookshelf.position.set(-7, 0, -1);
   world.scene.add(bookshelf);
   
   world.scene.add(livingGroup);
@@ -319,17 +678,17 @@ function addLivingArea(world: World): void {
  * Dining area with table, chairs, place settings
  */
 function addDiningArea(world: World): void {
-  // Dining table
+  // Dining table - moved more centered and closer to back windows
   const diningTable = createDiningTable();
-  diningTable.position.set(2, 0, -3);
+  diningTable.position.set(0, 0, -3.5);
   world.scene.add(diningTable);
   
   // Chairs around table
   const chairPositions = [
-    { pos: new THREE.Vector3(0.5, 0, -3), rot: Math.PI / 2 },
-    { pos: new THREE.Vector3(3.5, 0, -3), rot: -Math.PI / 2 },
-    { pos: new THREE.Vector3(2, 0, -4.2), rot: 0 },
-    { pos: new THREE.Vector3(2, 0, -1.8), rot: Math.PI }
+    { pos: new THREE.Vector3(-1.5, 0, -3.5), rot: Math.PI / 2 },
+    { pos: new THREE.Vector3(1.5, 0, -3.5), rot: -Math.PI / 2 },
+    { pos: new THREE.Vector3(0, 0, -4.7), rot: 0 },
+    { pos: new THREE.Vector3(0, 0, -2.3), rot: Math.PI }
   ];
   
   chairPositions.forEach(({ pos, rot }) => {
@@ -341,38 +700,78 @@ function addDiningArea(world: World): void {
   
   // Table centerpiece (vase with flowers)
   const centerpiece = createCenterpiece();
-  centerpiece.position.set(2, 1.1, -3);
+  centerpiece.position.set(0, 1.1, -3.5);
   world.scene.add(centerpiece);
+  
+  // Add place settings at each seat
+  const placeSettingPositions = [
+    { x: -0.8, z: -3.5 },  // Left
+    { x: 0.8, z: -3.5 },   // Right
+    { x: 0, z: -4.2 },     // Back
+    { x: 0, z: -2.8 }      // Front
+  ];
+  
+  placeSettingPositions.forEach(pos => {
+    // Placemat
+    const placemat = createPlacemat();
+    placemat.position.set(pos.x, 1.06, pos.z);
+    world.scene.add(placemat);
+    
+    // Wine glass
+    const glass = createWineGlass();
+    glass.position.set(pos.x + 0.12, 1.07, pos.z + 0.08);
+    world.scene.add(glass);
+    
+    // Cutlery
+    const cutlery = createCutlerySet();
+    cutlery.position.set(pos.x, 1.07, pos.z);
+    world.scene.add(cutlery);
+  });
 }
 
 /**
  * Kitchen area with counters, cabinets, appliances
  */
 function addKitchenArea(world: World): void {
-  // Counter along right wall
+  // Counter along right wall - positioned in kitchen tile zone
   const counter = createCounter();
-  counter.position.set(6, 0, 2);
+  counter.position.set(6.5, 0, 0);
   world.scene.add(counter);
   
   // Upper cabinets
   const upperCabinet = createUpperCabinet();
-  upperCabinet.position.set(6, 2.5, 2);
+  upperCabinet.position.set(6.5, 2.5, 0);
   world.scene.add(upperCabinet);
   
-  // Fridge
+  // Fridge - back corner of kitchen
   const fridge = createFridge();
-  fridge.position.set(7, 0, -2);
+  fridge.position.set(7, 0, -3.5);
   world.scene.add(fridge);
   
   // Sink on counter
   const sink = createSink();
-  sink.position.set(6.5, 0.95, 2);
+  sink.position.set(6.8, 0.95, 0);
   world.scene.add(sink);
   
-  // Shelves with jars/items
+  // Shelves with jars/items - on kitchen wall
   const shelf = createKitchenShelf();
-  shelf.position.set(7, 1.5, 5);
+  shelf.position.set(7, 1.5, 2);
   world.scene.add(shelf);
+  
+  // Water cooler near kitchen
+  const waterCooler = createWaterCooler();
+  waterCooler.position.set(5.5, 0, 5);
+  world.scene.add(waterCooler);
+  
+  // Microwave on counter
+  const microwave = createMicrowave();
+  microwave.position.set(6.5, 1.15, -1);
+  world.scene.add(microwave);
+  
+  // Toaster on counter
+  const toaster = createToaster();
+  toaster.position.set(6.5, 1.05, 1.5);
+  world.scene.add(toaster);
 }
 
 /**
@@ -555,7 +954,7 @@ function createBookshelf(): THREE.Group {
     for (let j = 0; j < 5; j++) {
       const book = createBook();
       book.position.set(-0.6 + j * 0.25, 0.25 + i * 0.5, 0);
-      book.rotation.y = (Math.random() - 0.5) * 0.2;
+      book.rotation.y = (getRandom() - 0.5) * 0.2;
       shelfGroup.add(book);
     }
   }
@@ -565,7 +964,7 @@ function createBookshelf(): THREE.Group {
 
 function createBook(): THREE.Mesh {
   const colors = [0xff6b6b, 0x4ecdc4, 0x45b7d1, 0xf7dc6f, 0xbb8fce];
-  const color = colors[Math.floor(Math.random() * colors.length)];
+  const color = colors[Math.floor(getRandom() * colors.length)];
   const book = new THREE.Mesh(
     new THREE.BoxGeometry(0.15, 0.2, 0.05),
     createToonMaterial(color)
@@ -673,6 +1072,202 @@ function createCenterpiece(): THREE.Group {
     );
     group.add(flower);
   }
+  
+  return group;
+}
+
+// NEW DETAILED PROPS
+
+function createPlacemat(): THREE.Mesh {
+  const placemat = new THREE.Mesh(
+    new THREE.BoxGeometry(0.4, 0.01, 0.3),
+    createToonMaterial(0xd2b48c)
+  );
+  placemat.castShadow = true;
+  return placemat;
+}
+
+function createWineGlass(): THREE.Group {
+  const group = new THREE.Group();
+  
+  // Stem
+  const stem = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.015, 0.02, 0.12),
+    createToonMaterial(0xe0e0e0)
+  );
+  stem.position.y = 0.06;
+  group.add(stem);
+  
+  // Bowl
+  const bowl = new THREE.Mesh(
+    new THREE.SphereGeometry(0.05),
+    new THREE.MeshToonMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0.3
+    })
+  );
+  bowl.scale.set(1, 1.2, 1);
+  bowl.position.y = 0.13;
+  bowl.castShadow = true;
+  group.add(bowl);
+  
+  // Base
+  const base = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.03, 0.03, 0.01),
+    createToonMaterial(0xe0e0e0)
+  );
+  base.castShadow = true;
+  group.add(base);
+  
+  return group;
+}
+
+function createCutlerySet(): THREE.Group {
+  const group = new THREE.Group();
+  const silverMaterial = createToonMaterial(0xc0c0c0);
+  
+  // Fork
+  const fork = new THREE.Mesh(
+    new THREE.BoxGeometry(0.02, 0.01, 0.15),
+    silverMaterial
+  );
+  fork.position.set(-0.05, 0.005, 0);
+  group.add(fork);
+  
+  // Knife
+  const knife = new THREE.Mesh(
+    new THREE.BoxGeometry(0.015, 0.01, 0.15),
+    silverMaterial
+  );
+  knife.position.set(0.05, 0.005, 0);
+  group.add(knife);
+  
+  return group;
+}
+
+function createWaterCooler(): THREE.Group {
+  const group = new THREE.Group();
+  
+  // Base cabinet
+  const base = new THREE.Mesh(
+    new THREE.BoxGeometry(0.5, 0.6, 0.5),
+    createToonMaterial(0x708090)
+  );
+  base.position.y = 0.3;
+  base.castShadow = true;
+  group.add(base);
+  
+  // Water bottle (large jug)
+  const bottle = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.2, 0.22, 0.5),
+    new THREE.MeshToonMaterial({
+      color: 0x87ceeb,
+      transparent: true,
+      opacity: 0.4
+    })
+  );
+  bottle.position.y = 0.85;
+  bottle.castShadow = true;
+  group.add(bottle);
+  
+  // Bottle neck
+  const neck = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.08, 0.2, 0.15),
+    new THREE.MeshToonMaterial({
+      color: 0x4682b4,
+      transparent: true,
+      opacity: 0.5
+    })
+  );
+  neck.position.y = 1.15;
+  group.add(neck);
+  
+  // Dispenser tap
+  const tap = new THREE.Mesh(
+    new THREE.BoxGeometry(0.15, 0.05, 0.08),
+    createToonMaterial(0x4169e1)
+  );
+  tap.position.set(0.2, 0.8, 0);
+  group.add(tap);
+  
+  return group;
+}
+
+function createMicrowave(): THREE.Group {
+  const group = new THREE.Group();
+  
+  // Body
+  const body = new THREE.Mesh(
+    new THREE.BoxGeometry(0.5, 0.35, 0.4),
+    createToonMaterial(0x2f4f4f)
+  );
+  body.castShadow = true;
+  group.add(body);
+  
+  // Door (glass front)
+  const door = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.35, 0.25),
+    new THREE.MeshToonMaterial({
+      color: 0x333333,
+      transparent: true,
+      opacity: 0.6
+    })
+  );
+  door.position.set(0, 0, 0.21);
+  group.add(door);
+  
+  // Control panel
+  const panel = new THREE.Mesh(
+    new THREE.BoxGeometry(0.12, 0.25, 0.02),
+    createToonMaterial(0x1a1a1a)
+  );
+  panel.position.set(0.19, 0, 0.21);
+  group.add(panel);
+  
+  // Buttons (small colored squares)
+  const buttonColors = [0xff0000, 0x00ff00, 0xffff00];
+  for (let i = 0; i < 3; i++) {
+    const button = new THREE.Mesh(
+      new THREE.BoxGeometry(0.03, 0.03, 0.01),
+      createToonMaterial(buttonColors[i])
+    );
+    button.position.set(0.19, -0.05 + i * 0.05, 0.22);
+    group.add(button);
+  }
+  
+  return group;
+}
+
+function createToaster(): THREE.Group {
+  const group = new THREE.Group();
+  
+  // Body
+  const body = new THREE.Mesh(
+    new THREE.BoxGeometry(0.25, 0.2, 0.15),
+    createToonMaterial(0xdc143c)
+  );
+  body.position.y = 0.1;
+  body.castShadow = true;
+  group.add(body);
+  
+  // Slots
+  for (let i = 0; i < 2; i++) {
+    const slot = new THREE.Mesh(
+      new THREE.BoxGeometry(0.08, 0.15, 0.02),
+      createToonMaterial(0x1a1a1a)
+    );
+    slot.position.set(-0.06 + i * 0.12, 0.125, 0);
+    group.add(slot);
+  }
+  
+  // Lever
+  const lever = new THREE.Mesh(
+    new THREE.BoxGeometry(0.03, 0.08, 0.02),
+    createToonMaterial(0x696969)
+  );
+  lever.position.set(0.1, 0.04, 0);
+  group.add(lever);
   
   return group;
 }
@@ -827,22 +1422,117 @@ function createKitchenShelf(): THREE.Group {
 
 function createBoxStack(): THREE.Group {
   const stackGroup = new THREE.Group();
-  const boxColors = [0xff6b6b, 0x4ecdc4, 0xf7dc6f, 0xbb8fce];
   
-  for (let i = 0; i < 4; i++) {
-    const box = new THREE.Mesh(
-      new THREE.BoxGeometry(0.4, 0.4, 0.4),
-      createToonMaterial(boxColors[i % boxColors.length])
-    );
-    box.position.set(
-      (Math.random() - 0.5) * 0.1,
-      0.2 + i * 0.4,
-      (Math.random() - 0.5) * 0.1
-    );
-    box.rotation.y = (Math.random() - 0.5) * 0.3;
-    box.castShadow = true;
-    stackGroup.add(box);
-  }
+  // Create a more intentional cubby/shelf tower like the reference
+  // Base colors matching reference
+  const cubeColors = [0xff6b6b, 0x4ecdc4, 0xffd93d, 0xbb8fce, 0x95e1d3, 0xffa07a];
+  
+  // Large base cube
+  const baseSize = 0.6;
+  const baseCube = new THREE.Mesh(
+    new THREE.BoxGeometry(baseSize, baseSize, baseSize),
+    createToonMaterial(cubeColors[0])
+  );
+  baseCube.position.set(0, baseSize / 2, 0);
+  baseCube.castShadow = true;
+  stackGroup.add(baseCube);
+  
+  // Medium cube on top, slightly offset
+  const midSize = 0.5;
+  const midCube = new THREE.Mesh(
+    new THREE.BoxGeometry(midSize, midSize, midSize),
+    createToonMaterial(cubeColors[1])
+  );
+  midCube.position.set(-0.1, baseSize + midSize / 2, 0.05);
+  midCube.rotation.y = 0.2;
+  midCube.castShadow = true;
+  stackGroup.add(midCube);
+  
+  // Small cube on top
+  const smallSize = 0.4;
+  const smallCube = new THREE.Mesh(
+    new THREE.BoxGeometry(smallSize, smallSize, smallSize),
+    createToonMaterial(cubeColors[2])
+  );
+  smallCube.position.set(0.08, baseSize + midSize + smallSize / 2, -0.08);
+  smallCube.rotation.y = -0.3;
+  smallCube.castShadow = true;
+  stackGroup.add(smallCube);
+  
+  // Add a "cubby" - open compartment on side
+  const cubbyFrame = new THREE.Group();
+  
+  // Cubby walls (3 sides + top/bottom)
+  const cubbyMaterial = createToonMaterial(cubeColors[3]);
+  const cubbySize = 0.45;
+  const thickness = 0.05;
+  
+  // Bottom
+  const cubbyBottom = new THREE.Mesh(
+    new THREE.BoxGeometry(cubbySize, thickness, cubbySize),
+    cubbyMaterial
+  );
+  cubbyBottom.castShadow = true;
+  cubbyFrame.add(cubbyBottom);
+  
+  // Top
+  const cubbyTop = new THREE.Mesh(
+    new THREE.BoxGeometry(cubbySize, thickness, cubbySize),
+    cubbyMaterial
+  );
+  cubbyTop.position.y = cubbySize;
+  cubbyTop.castShadow = true;
+  cubbyFrame.add(cubbyTop);
+  
+  // Back
+  const cubbyBack = new THREE.Mesh(
+    new THREE.BoxGeometry(cubbySize, cubbySize, thickness),
+    cubbyMaterial
+  );
+  cubbyBack.position.set(0, cubbySize / 2, -cubbySize / 2 + thickness / 2);
+  cubbyBack.castShadow = true;
+  cubbyFrame.add(cubbyBack);
+  
+  // Left side
+  const cubbyLeft = new THREE.Mesh(
+    new THREE.BoxGeometry(thickness, cubbySize, cubbySize),
+    cubbyMaterial
+  );
+  cubbyLeft.position.set(-cubbySize / 2 + thickness / 2, cubbySize / 2, 0);
+  cubbyLeft.castShadow = true;
+  cubbyFrame.add(cubbyLeft);
+  
+  // Right side
+  const cubbyRight = new THREE.Mesh(
+    new THREE.BoxGeometry(thickness, cubbySize, cubbySize),
+    cubbyMaterial
+  );
+  cubbyRight.position.set(cubbySize / 2 - thickness / 2, cubbySize / 2, 0);
+  cubbyRight.castShadow = true;
+  cubbyFrame.add(cubbyRight);
+  
+  // Position cubby to the side
+  cubbyFrame.position.set(0.6, 0, 0);
+  stackGroup.add(cubbyFrame);
+  
+  // Add small decorative items in/around the cubby
+  const smallBall = new THREE.Mesh(
+    new THREE.SphereGeometry(0.08),
+    createToonMaterial(cubeColors[4])
+  );
+  smallBall.position.set(0.6, 0.15, 0);
+  smallBall.castShadow = true;
+  stackGroup.add(smallBall);
+  
+  // Tiny cube accent
+  const tinyCube = new THREE.Mesh(
+    new THREE.BoxGeometry(0.12, 0.12, 0.12),
+    createToonMaterial(cubeColors[5])
+  );
+  tinyCube.position.set(0.5, 0.52, 0.1);
+  tinyCube.rotation.set(0.3, 0.4, 0.2);
+  tinyCube.castShadow = true;
+  stackGroup.add(tinyCube);
   
   return stackGroup;
 }
@@ -907,7 +1597,7 @@ function createPottedPlant(): THREE.Group {
     const angle = (i / 5) * Math.PI * 2;
     leaf.position.set(
       Math.cos(angle) * 0.15,
-      0.3 + Math.random() * 0.2,
+      0.3 + getRandom() * 0.2,
       Math.sin(angle) * 0.15
     );
     plantGroup.add(leaf);
@@ -946,14 +1636,14 @@ function createToyPile(): THREE.Group {
     }
     
     toy.position.set(
-      (Math.random() - 0.5) * 0.6,
+      (getRandom() - 0.5) * 0.6,
       0.08 + (i % 3) * 0.12,
-      (Math.random() - 0.5) * 0.6
+      (getRandom() - 0.5) * 0.6
     );
     toy.rotation.set(
-      Math.random() * Math.PI,
-      Math.random() * Math.PI,
-      Math.random() * Math.PI
+      getRandom() * Math.PI,
+      getRandom() * Math.PI,
+      getRandom() * Math.PI
     );
     toy.castShadow = true;
     toyGroup.add(toy);
@@ -965,23 +1655,22 @@ function createToyPile(): THREE.Group {
 /**
  * Adds interactable items (knockables and scratchables) to the world
  */
-export function addInteractables(world: World): void {
+export function addInteractables(world: World, physics: PhysicsSystem): void {
   // Dining table items (knockable)
-  addDiningTableItems(world);
+  addDiningTableItems(world, physics);
   
   // Kitchen shelf items (knockable)
-  addKitchenShelfItems(world);
+  addKitchenShelfItems(world, physics);
   
   // Cat scratching post (scratchable)
-  addScratchingPost(world);
+  addScratchingPost(world, physics);
   
   // Small plant pot (knockable)
-  addKnockablePlant(world);
+  addKnockablePlant(world, physics);
 }
 
-function addDiningTableItems(world: World): void {
+function addDiningTableItems(world: World, _physics: PhysicsSystem): void {
   const tableY = 1.15;
-  const tableZ = -3;
   
   // Plates
   const platePositions = [
@@ -992,8 +1681,9 @@ function addDiningTableItems(world: World): void {
   ];
   
   platePositions.forEach((pos, index) => {
+    const plateGeometry = new THREE.CylinderGeometry(0.12, 0.12, 0.02);
     const plate = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.12, 0.12, 0.02),
+      plateGeometry,
       createToonMaterial(0xffffff)
     );
     plate.position.set(pos.x, tableY, pos.z);
@@ -1062,7 +1752,7 @@ function addDiningTableItems(world: World): void {
   });
 }
 
-function addKitchenShelfItems(world: World): void {
+function addKitchenShelfItems(world: World, _physics: PhysicsSystem): void {
   // A couple small jars on the counter (knockable)
   const jarPositions = [
     { x: 5.5, y: 1.05, z: 1.5 },
@@ -1070,8 +1760,9 @@ function addKitchenShelfItems(world: World): void {
   ];
   
   jarPositions.forEach((pos, index) => {
+    const jarGeometry = new THREE.CylinderGeometry(0.08, 0.08, 0.12);
     const jar = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.08, 0.08, 0.12),
+      jarGeometry,
       createToonMaterial(0xffa500)
     );
     jar.position.set(pos.x, pos.y, pos.z);
@@ -1090,7 +1781,7 @@ function addKitchenShelfItems(world: World): void {
   });
 }
 
-function addScratchingPost(world: World): void {
+function addScratchingPost(world: World, _physics: PhysicsSystem): void {
   const postGroup = new THREE.Group();
   
   // Base
@@ -1142,7 +1833,7 @@ function addScratchingPost(world: World): void {
   world.addEntity('scratching_post', entity);
 }
 
-function addKnockablePlant(world: World): void {
+function addKnockablePlant(world: World, _physics: PhysicsSystem): void {
   const plantGroup = new THREE.Group();
   
   // Small pot

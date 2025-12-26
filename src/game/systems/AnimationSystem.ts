@@ -71,7 +71,7 @@ export class AnimationSystem {
     const targetPosition = startPosition.clone();
     targetPosition.x += 0.3;  // Extend forward
     targetPosition.y -= 0.1;  // Down slightly
-    targetPosition.z -= 0.2;  // Left
+    targetPosition.z += 0.2;  // Left (+Z is Left)
 
     // Forward animation (swipe)
     const swipeAnim: PawAnimation = {
@@ -109,7 +109,7 @@ export class AnimationSystem {
     const targetPosition = startPosition.clone();
     targetPosition.x += 0.3;  // Extend forward
     targetPosition.y -= 0.1;  // Down slightly
-    targetPosition.z += 0.2;  // Right
+    targetPosition.z -= 0.2;  // Right (-Z is Right)
 
     // Forward animation (swipe)
     const swipeAnim: PawAnimation = {

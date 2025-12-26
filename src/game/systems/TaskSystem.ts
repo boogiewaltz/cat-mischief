@@ -46,10 +46,10 @@ export class TaskSystem {
       },
       {
         id: 'knock_all_items',
-        description: 'Knock 15 items total',
+        description: 'Knock 10 items total',
         completed: false,
         progress: 0,
-        required: 15,
+        required: 10,
         type: 'knock'
       }
     ];

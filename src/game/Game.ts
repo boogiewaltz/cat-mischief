@@ -51,7 +51,7 @@ export class Game {
     this.systems = {
       input: new InputSystem(),
       physics: new PhysicsSystem(),
-      player: new PlayerSystem(this.world),
+      player: new PlayerSystem(this.world, new PhysicsSystem()), // Temporary placeholder
       npc: new NpcSystem(this.world),
       camera: new CameraSystem(this.world),
       animation: new AnimationSystem(),
@@ -59,6 +59,10 @@ export class Game {
       task: new TaskSystem(this.world),
       audio: new AudioSystem()
     };
+    
+    // Replace player system with correct physics instance after initialization
+    this.systems.player = new PlayerSystem(this.world, this.systems.physics);
+    this.systems.pawInteraction.setPhysics(this.systems.physics);
 
     this.clock = new THREE.Clock();
 
@@ -99,7 +103,7 @@ export class Game {
     if (this.isRunning) return;
     
     this.isRunning = true;
-    this.world.initialize();
+    this.world.initialize(this.systems.physics);
     this.animate();
   }
 
@@ -115,6 +119,10 @@ export class Game {
     this.systems.player.update(deltaTime, this.systems.input);
     this.systems.npc.update(deltaTime);
     this.systems.physics.update(deltaTime);
+    
+    // Sync dynamic entities from physics
+    this.syncDynamicEntities();
+    
     this.systems.animation.update(deltaTime);
     this.systems.pawInteraction.update(deltaTime, this.systems.input, this.systems.animation);
     this.systems.task.update(deltaTime);
@@ -146,6 +154,15 @@ export class Game {
     }
     
     debugInfo.textContent = info;
+  }
+
+  private syncDynamicEntities(): void {
+    // Sync all dynamic entities from their rigidbodies
+    for (const [, entity] of this.world.getAllEntities()) {
+      if (entity.type === 'knockable' && entity.physicsBody) {
+        this.systems.physics.syncEntityToRigidBody(entity, entity.physicsBody);
+      }
+    }
   }
 
   public stop(): void {
