@@ -77,7 +77,7 @@ export class World {
     this.scene.add(skyFill);
   }
 
-  public initialize(physics: PhysicsSystem): void {
+  public async initialize(physics: PhysicsSystem): Promise<void> {
     // Build the house with all furniture and decor
     buildHouse(this, physics);
     
@@ -85,14 +85,14 @@ export class World {
     addInteractables(this, physics);
     
     // Create the player
-    this.createPlayer(physics);
+    await this.createPlayer(physics);
     
     // Create NPCs
     this.createHumanoidNpc('npc_1', new THREE.Vector3(-3, 0, -2));
   }
 
 
-  private createPlayer(_physics: PhysicsSystem): void {
+  private async createPlayer(_physics: PhysicsSystem): Promise<void> {
     // Cat with proper hierarchy and improved proportions
     const catGroup = new THREE.Group();
     catGroup.name = 'catRoot';
@@ -314,7 +314,23 @@ export class World {
     };
     this.entities.set('player', this.player);
     
-    // Player physics registration disabled to avoid WASM issues
+    // Register player physics body
+    if (_physics.isReady()) {
+      const rapierWorld = _physics.getWorld();
+      if (rapierWorld) {
+        const { createCapsuleCollider } = await import('./physics/RapierHelpers');
+        const handle = createCapsuleCollider(
+          rapierWorld,
+          0.25,
+          0.3,
+          catGroup.position,
+          catGroup.rotation
+        );
+        // Store physics body on player entity
+        this.player.physicsBody = handle.rigidBody;
+        _physics.registerRigidBody('player', handle.rigidBody, handle.collider);
+      }
+    }
   }
 
   private createHumanoidNpc(id: string, position: THREE.Vector3): void {

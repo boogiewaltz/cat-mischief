@@ -54,10 +54,10 @@ export class PlayerSystem {
     // Movement (fixed directions)
     const moveDirection = new THREE.Vector3();
     
-    // W = forward (negative Z in Three.js)
-    if (input.state.forward) moveDirection.z -= 1;
-    // S = backward (positive Z)
-    if (input.state.backward) moveDirection.z += 1;
+    // W = forward (positive Z - toward where camera looks)
+    if (input.state.forward) moveDirection.z += 1;
+    // S = backward (negative Z)
+    if (input.state.backward) moveDirection.z -= 1;
     // A = left (negative X)
     if (input.state.left) moveDirection.x -= 1;
     // D = right (positive X)
@@ -72,22 +72,33 @@ export class PlayerSystem {
 
         const speed = input.state.sprint ? this.moveSpeed * this.sprintMultiplier : this.moveSpeed;
         const targetVelX = moveDirection.x * speed;
-        const targetVelZ = moveDirection.z * speed;
+        // Negate Z velocity so movement matches facing direction visually
+        const targetVelZ = -moveDirection.z * speed;
 
         const newVelX = THREE.MathUtils.lerp(currentVel.x, targetVelX, 10 * deltaTime);
         const newVelZ = THREE.MathUtils.lerp(currentVel.z, targetVelZ, 10 * deltaTime);
 
         rigidBody.setLinvel({ x: newVelX, y: currentVel.y, z: newVelZ }, true);
 
-        // Rotate to face movement direction (cat forward is +X)
-        const targetAngle = Math.atan2(-moveDirection.z, moveDirection.x);
-        let angleDiff = targetAngle - player.rotation.y;
+        // Rotate to face movement direction
+        // In Three.js: +X = right, -X = left, +Z = forward (towards camera), -Z = back (away from camera)
+        // Cat default faces +X (right), so we calculate rotation from movement direction
+        const targetAngle = Math.atan2(moveDirection.z, moveDirection.x);
+        
+        // Normalize current rotation to [-π, π] range before calculating difference
+        let currentAngle = player.rotation.y;
+        while (currentAngle > Math.PI) currentAngle -= Math.PI * 2;
+        while (currentAngle < -Math.PI) currentAngle += Math.PI * 2;
+        
+        let angleDiff = targetAngle - currentAngle;
         while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
         while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
 
-        const newAngle = player.rotation.y + angleDiff * Math.min(1, 20 * deltaTime);
-        const quat = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, newAngle, 0));
-        rigidBody.setRotation({ w: quat.w, x: quat.x, y: quat.y, z: quat.z }, true);
+        const newAngle = currentAngle + angleDiff * Math.min(1, 20 * deltaTime);
+        
+        // Set rotation directly on player (not via rigidbody to avoid sync conflicts)
+        player.rotation.y = newAngle;
+        player.mesh.rotation.y = newAngle;
       } else {
         const newVelX = THREE.MathUtils.lerp(currentVel.x, 0, 8 * deltaTime);
         const newVelZ = THREE.MathUtils.lerp(currentVel.z, 0, 8 * deltaTime);
@@ -101,7 +112,8 @@ export class PlayerSystem {
         this.isGrounded = false;
       }
 
-      this.physics.syncEntityToRigidBody(player, rigidBody);
+      // DO NOT call syncRigidBodyFromEntity for dynamic bodies
+      // The physics system will sync the entity FROM the rigid body instead
       return;
     }
 
@@ -112,9 +124,10 @@ export class PlayerSystem {
       const speed = input.state.sprint ? this.moveSpeed * this.sprintMultiplier : this.moveSpeed;
 
       this.velocity.x = THREE.MathUtils.lerp(this.velocity.x, moveDirection.x * speed, 10 * deltaTime);
-      this.velocity.z = THREE.MathUtils.lerp(this.velocity.z, moveDirection.z * speed, 10 * deltaTime);
+      // Negate Z velocity so movement matches facing direction visually
+      this.velocity.z = THREE.MathUtils.lerp(this.velocity.z, -moveDirection.z * speed, 10 * deltaTime);
 
-      const targetAngle = Math.atan2(-moveDirection.z, moveDirection.x);
+      const targetAngle = Math.atan2(moveDirection.z, moveDirection.x);
       let angleDiff = targetAngle - player.rotation.y;
       while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
       while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
@@ -160,10 +173,12 @@ export class PlayerSystem {
   private checkGrounded(player: any): void {
     // Rapier raycast down from player position
     const position = player.position;
-    this.isGrounded = this.physics.checkGrounded(
+    const rayResult = this.physics.raycast(
       { x: position.x, y: position.y, z: position.z },
+      { x: 0, y: -1, z: 0 },
       this.groundRayDistance
     );
+    this.isGrounded = rayResult !== null;
   }
 
   public isPlayerGrounded(): boolean {

@@ -6,19 +6,22 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
-    "test:e2e:debug": "playwright test --debug"
+    "test:e2e:debug": "playwright test --debug",
+    "qa": "npm run typecheck && npm run build && npm run test:e2e"
   },
   "dependencies": {
-    "three": "^0.160.0",
-    "@dimforge/rapier3d": "^0.11.2"
+    "@dimforge/rapier3d": "^0.11.2",
+    "three": "^0.160.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.40.1",
     "@types/three": "^0.160.0",
     "typescript": "^5.3.3",
-    "vite": "^5.0.11"
+    "vite": "^5.0.11",
+    "vite-plugin-top-level-await": "^1.6.0",
+    "vite-plugin-wasm": "^3.5.0"
   }
 }
-

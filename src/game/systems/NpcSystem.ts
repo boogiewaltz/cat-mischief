@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { World, Entity } from '../World';
+import { getRandom } from '../utils/rng';
 
 interface NpcRig {
   spine: THREE.Group;
@@ -189,7 +190,7 @@ export class NpcSystem {
     
     if (npc.data.wanderTimer <= 0 || !npc.data.wanderTarget) {
       this.pickNewWanderTarget(npc);
-      npc.data.wanderTimer = this.wanderInterval + Math.random() * 2.0;
+      npc.data.wanderTimer = this.wanderInterval + getRandom() * 2.0;
     }
 
     if (npc.data.wanderTarget) {
@@ -253,8 +254,8 @@ export class NpcSystem {
     if (!npc.data) return;
 
     // Wander locally around current position (feels more believable than fully random tele-walks)
-    const angle = Math.random() * Math.PI * 2;
-    const radius = Math.random() * this.wanderRadius;
+    const angle = getRandom() * Math.PI * 2;
+    const radius = getRandom() * this.wanderRadius;
 
     const targetX = npc.position.x + Math.cos(angle) * radius;
     const targetZ = npc.position.z + Math.sin(angle) * radius;

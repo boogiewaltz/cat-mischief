@@ -3,125 +3,30 @@ import { World, Entity } from './World';
 import { createToonMaterial } from './materials/ToonMaterial';
 import type { PhysicsSystem } from './systems/PhysicsSystem';
 import {
-  createBoxCollider,
-  createSphereCollider,
-  createCylinderCollider,
-  CollisionGroup
-} from './physics/Physics';
-
-// Physics kind enum
-export enum PhysicsKind {
-  StaticCollider,
-  DynamicProp,
-  DynamicLightFurniture
-}
-
-// Helper to register physics for an entity
-export function registerPhysics(
-  _world: World,
-  physics: PhysicsSystem,
-  entity: Entity,
-  entityId: string,
-  physicsKind: PhysicsKind,
-  geometryInfo?: { type: 'box' | 'sphere' | 'cylinder'; geometry: any }
-): void {
-  if (!physics.isReady() || !physics.getWorld()) {
-    console.warn('Physics not ready, skipping registration for', entityId);
-    return;
-  }
-
-  const rapierWorld = physics.getWorld()!;
-  const isStatic = physicsKind === PhysicsKind.StaticCollider;
-  
-  // Determine collision groups
-  let collisionGroup = CollisionGroup.Static;
-  let collisionMask = CollisionGroup.All;
-  
-  if (physicsKind === PhysicsKind.DynamicProp) {
-    collisionGroup = CollisionGroup.Props;
-  } else if (physicsKind === PhysicsKind.DynamicLightFurniture) {
-    collisionGroup = CollisionGroup.Furniture;
-  }
-
-  // Create collider based on geometry type
-  if (geometryInfo) {
-    let handle;
-    
-    switch (geometryInfo.type) {
-      case 'box':
-        handle = createBoxCollider(
-          rapierWorld,
-          geometryInfo.geometry,
-          entity.position,
-          entity.rotation,
-          isStatic,
-          collisionGroup,
-          collisionMask
-        );
-        break;
-      case 'sphere':
-        handle = createSphereCollider(
-          rapierWorld,
-          geometryInfo.geometry,
-          entity.position,
-          entity.rotation,
-          isStatic,
-          collisionGroup,
-          collisionMask
-        );
-        break;
-      case 'cylinder':
-        handle = createCylinderCollider(
-          rapierWorld,
-          geometryInfo.geometry,
-          entity.position,
-          entity.rotation,
-          isStatic,
-          collisionGroup,
-          collisionMask
-        );
-        break;
-    }
-
-    if (handle) {
-      physics.registerRigidBody(entityId, handle.rigidBody, handle.collider);
-      entity.physicsBody = handle.rigidBody;
-      
-      // Set material properties based on type
-      if (physicsKind === PhysicsKind.DynamicProp) {
-        handle.collider.setFriction(0.5);
-        handle.collider.setRestitution(0.2);
-        handle.rigidBody.setAdditionalMass(0.5, true);
-      } else if (physicsKind === PhysicsKind.DynamicLightFurniture) {
-        handle.collider.setFriction(0.7);
-        handle.collider.setRestitution(0.1);
-        handle.rigidBody.setAdditionalMass(5.0, true);
-      } else {
-        handle.collider.setFriction(0.8);
-        handle.collider.setRestitution(0.0);
-      }
-    }
-  }
-}
+  createDynamicCylinderCollider,
+  createDynamicBoxCollider,
+  createDynamicSphereCollider,
+  createFixedBoxCollider
+} from './physics/RapierHelpers';
 
 import { getRandom } from './utils/rng';
 
 /**
  * Builds a complete, lived-in house with furniture, decor, and interactables
  */
-export function buildHouse(world: World, _physics: PhysicsSystem): void {
+export function buildHouse(world: World, physics: PhysicsSystem): void {
   // Create base structure
-  createFloor(world);
-  createWalls(world);
+  createFloor(world, physics);
+  createWalls(world, physics);
   createDoorway(world);
   createWindows(world);
   createCeiling(world);
   
   // Add furniture and decor clusters
-  addLivingArea(world);
-  addDiningArea(world);
-  addKitchenArea(world);
-  addDecorClusters(world);
+  addLivingArea(world, physics);
+  addDiningArea(world, physics);
+  addKitchenArea(world, physics);
+  addDecorClusters(world, physics);
   
   // Add interactables (will be handled separately after structure is built)
 }
@@ -129,7 +34,7 @@ export function buildHouse(world: World, _physics: PhysicsSystem): void {
 /**
  * Creates the floor with wood and tiled zones
  */
-function createFloor(world: World): void {
+function createFloor(world: World, physics: PhysicsSystem): void {
   // Main wood floor - warmer tone
   const floorGeometry = new THREE.PlaneGeometry(30, 30);
   const floorMaterial = createToonMaterial(0xdaa76e); // Warmer wood
@@ -145,6 +50,21 @@ function createFloor(world: World): void {
     type: 'floor'
   };
   world.addEntity('floor', entity);
+  
+  // Add physics collider for floor
+  if (physics.isReady()) {
+    const rapierWorld = physics.getWorld();
+    if (rapierWorld) {
+      const handle = createFixedBoxCollider(
+        rapierWorld,
+        30, // width
+        0.2, // height (thin floor)
+        30, // depth
+        new THREE.Vector3(0, -0.1, 0) // slightly below visual floor
+      );
+      physics.registerRigidBody('floor_collider', handle.rigidBody, handle.collider);
+    }
+  }
   
   // Kitchen tile zone (checker pattern)
   const tileSize = 0.5;
@@ -178,7 +98,7 @@ function createFloor(world: World): void {
 /**
  * Creates walls with baseboards and accent colors
  */
-function createWalls(world: World): void {
+function createWalls(world: World, physics: PhysicsSystem): void {
   const wallMaterial = createToonMaterial(0xffe6b3); // Warm cream
   const accentWallMaterial = createToonMaterial(0x9acd32); // Green accent like reference
   const wallHeight = 5;
@@ -198,6 +118,21 @@ function createWalls(world: World): void {
   };
   world.addEntity('back_wall', backWallEntity);
   
+  // Add physics collider for back wall
+  if (physics.isReady()) {
+    const rapierWorld = physics.getWorld();
+    if (rapierWorld) {
+      const handle = createFixedBoxCollider(
+        rapierWorld,
+        15,
+        wallHeight,
+        0.3,
+        backWall.position
+      );
+      physics.registerRigidBody('back_wall_collider', handle.rigidBody, handle.collider);
+    }
+  }
+  
   // Left wall - GREEN ACCENT WALL
   const leftWallGeometry = new THREE.BoxGeometry(0.3, wallHeight, 15);
   const leftWall = new THREE.Mesh(leftWallGeometry, accentWallMaterial);
@@ -213,6 +148,21 @@ function createWalls(world: World): void {
   };
   world.addEntity('left_wall', leftWallEntity);
   
+  // Add physics collider for left wall
+  if (physics.isReady()) {
+    const rapierWorld = physics.getWorld();
+    if (rapierWorld) {
+      const handle = createFixedBoxCollider(
+        rapierWorld,
+        0.3,
+        wallHeight,
+        15,
+        leftWall.position
+      );
+      physics.registerRigidBody('left_wall_collider', handle.rigidBody, handle.collider);
+    }
+  }
+  
   // Right wall
   const rightWallGeometry = new THREE.BoxGeometry(0.3, wallHeight, 15);
   const rightWall = new THREE.Mesh(rightWallGeometry, wallMaterial);
@@ -227,6 +177,21 @@ function createWalls(world: World): void {
     type: 'wall'
   };
   world.addEntity('right_wall', rightWallEntity);
+  
+  // Add physics collider for right wall
+  if (physics.isReady()) {
+    const rapierWorld = physics.getWorld();
+    if (rapierWorld) {
+      const handle = createFixedBoxCollider(
+        rapierWorld,
+        0.3,
+        wallHeight,
+        15,
+        rightWall.position
+      );
+      physics.registerRigidBody('right_wall_collider', handle.rigidBody, handle.collider);
+    }
+  }
   
   // Add baseboards
   addBaseboards(world);
@@ -525,9 +490,9 @@ function addLayeredOutdoorView(world: World, x: number, index: number): void {
         createToonMaterial(leafColors[i % leafColors.length])
       );
       leaves.position.set(
-        treeX + (Math.random() - 0.5) * 0.3,
+        treeX + (getRandom() - 0.5) * 0.3,
         2.6 + i * 0.15,
-        -8.3 + (Math.random() - 0.5) * 0.2
+        -8.3 + (getRandom() - 0.5) * 0.2
       );
       world.scene.add(leaves);
     }
@@ -624,7 +589,7 @@ function createCeiling(world: World): void {
 /**
  * Living area with couch, coffee table, bookshelf, etc.
  */
-function addLivingArea(world: World): void {
+function addLivingArea(world: World, physics: PhysicsSystem): void {
   const livingGroup = new THREE.Group();
   
   // Couch (scratchable - will be added as entity separately) - positioned for foreground depth
@@ -642,10 +607,40 @@ function addLivingArea(world: World): void {
   };
   world.addEntity('couch', couchEntity);
   
+  // Add physics collider for couch
+  if (physics.isReady()) {
+    const rapierWorld = physics.getWorld();
+    if (rapierWorld) {
+      const handle = createFixedBoxCollider(
+        rapierWorld,
+        3, // width
+        0.8, // height
+        1.2, // depth
+        new THREE.Vector3(-5, 0.4, 4)
+      );
+      physics.registerRigidBody('couch_collider', handle.rigidBody, handle.collider);
+    }
+  }
+  
   // Coffee table - closer to viewer
   const coffeeTable = createCoffeeTable();
   coffeeTable.position.set(-5, 0, 2);
   world.scene.add(coffeeTable);
+  
+  // Add physics collider for coffee table
+  if (physics.isReady()) {
+    const rapierWorld = physics.getWorld();
+    if (rapierWorld) {
+      const handle = createFixedBoxCollider(
+        rapierWorld,
+        1.5,
+        0.4,
+        1,
+        new THREE.Vector3(-5, 0.2, 2)
+      );
+      physics.registerRigidBody('coffee_table_collider', handle.rigidBody, handle.collider);
+    }
+  }
   
   // Rug under coffee table - larger for depth
   const rug = new THREE.Mesh(
@@ -661,15 +656,97 @@ function addLivingArea(world: World): void {
   sideTable.position.set(-6.8, 0, 4);
   world.scene.add(sideTable);
   
-  // Lamp on side table
+  // Lamp on side table - make it knockable!
   const lamp = createLamp();
   lamp.position.set(-6.8, 0.7, 4);
   world.scene.add(lamp);
+  
+  const lampEntity: Entity = {
+    mesh: lamp,
+    position: lamp.position,
+    rotation: lamp.rotation,
+    velocity: new THREE.Vector3(),
+    type: 'knockable',
+    data: { knocked: false }
+  };
+  world.addEntity('side_table_lamp', lampEntity);
+  
+  // Add physics body for lamp (medium weight - lamp with base)
+  if (physics.isReady()) {
+    const rapierWorld = physics.getWorld();
+    if (rapierWorld) {
+      const handle = createDynamicCylinderCollider(
+        rapierWorld,
+        0.1, // radius
+        0.35, // half height
+        lamp.position,
+        lamp.rotation,
+        1.5 // Medium density
+      );
+      lampEntity.physicsBody = handle.rigidBody;
+      physics.registerRigidBody('side_table_lamp', handle.rigidBody, handle.collider);
+    }
+  }
   
   // Bookshelf on left wall (green accent wall)
   const bookshelf = createBookshelf();
   bookshelf.position.set(-7, 0, -1);
   world.scene.add(bookshelf);
+  
+  // Add physics collider for bookshelf frame (fixed)
+  if (physics.isReady()) {
+    const rapierWorld = physics.getWorld();
+    if (rapierWorld) {
+      const handle = createFixedBoxCollider(
+        rapierWorld,
+        1.5,
+        2,
+        0.3,
+        new THREE.Vector3(-7, 1, -1)
+      );
+      physics.registerRigidBody('bookshelf_collider', handle.rigidBody, handle.collider);
+      
+      // Make individual books knockable!
+      let bookIndex = 0;
+      bookshelf.children.forEach((child) => {
+        // Books are identified by their BoxGeometry with specific dimensions
+        if (child instanceof THREE.Mesh && 
+            child.geometry.type === 'BoxGeometry' &&
+            (child.geometry as THREE.BoxGeometry).parameters?.width === 0.15) {
+          
+          const worldPos = new THREE.Vector3();
+          child.getWorldPosition(worldPos);
+          
+          const bookEntity: Entity = {
+            mesh: child,
+            position: worldPos,
+            rotation: child.rotation,
+            velocity: new THREE.Vector3(),
+            type: 'knockable',
+            data: { knocked: false }
+          };
+          const bookId = `book_${bookIndex}`;
+          world.addEntity(bookId, bookEntity);
+          
+          // Add physics body for book (light - paper and cardboard)
+          const bookHandle = createDynamicBoxCollider(
+            rapierWorld,
+            new THREE.Vector3(0.075, 0.1, 0.025), // half extents
+            worldPos,
+            child.rotation
+          );
+          // Set lighter mass for books
+          if (bookHandle.rigidBody && bookHandle.rigidBody.setAdditionalMass) {
+            bookHandle.rigidBody.setAdditionalMass(0.3, true);
+          }
+          bookEntity.physicsBody = bookHandle.rigidBody;
+          physics.registerRigidBody(bookId, bookHandle.rigidBody, bookHandle.collider);
+          
+          bookIndex++;
+        }
+      });
+    }
+  }
   
   world.scene.add(livingGroup);
 }
@@ -677,11 +754,26 @@ function addLivingArea(world: World): void {
 /**
  * Dining area with table, chairs, place settings
  */
-function addDiningArea(world: World): void {
+function addDiningArea(world: World, physics: PhysicsSystem): void {
   // Dining table - moved more centered and closer to back windows
   const diningTable = createDiningTable();
   diningTable.position.set(0, 0, -3.5);
   world.scene.add(diningTable);
+  
+  // Add physics collider for dining table
+  if (physics.isReady()) {
+    const rapierWorld = physics.getWorld();
+    if (rapierWorld) {
+      const handle = createFixedBoxCollider(
+        rapierWorld,
+        3,
+        1,
+        1.5,
+        new THREE.Vector3(0, 0.5, -3.5)
+      );
+      physics.registerRigidBody('dining_table_collider', handle.rigidBody, handle.collider);
+    }
+  }
   
   // Chairs around table
   const chairPositions = [
@@ -691,17 +783,59 @@ function addDiningArea(world: World): void {
     { pos: new THREE.Vector3(0, 0, -2.3), rot: Math.PI }
   ];
   
-  chairPositions.forEach(({ pos, rot }) => {
+  chairPositions.forEach(({ pos, rot }, index) => {
     const chair = createChair();
     chair.position.copy(pos);
     chair.rotation.y = rot;
     world.scene.add(chair);
+    
+    // Add physics collider for chair
+    if (physics.isReady()) {
+      const rapierWorld = physics.getWorld();
+      if (rapierWorld) {
+        const handle = createFixedBoxCollider(
+          rapierWorld,
+          0.5,
+          0.8,
+          0.5,
+          new THREE.Vector3(pos.x, 0.4, pos.z)
+        );
+        physics.registerRigidBody(`chair_${index}_collider`, handle.rigidBody, handle.collider);
+      }
+    }
   });
   
-  // Table centerpiece (vase with flowers)
+  // Table centerpiece (vase with flowers) - make it knockable!
   const centerpiece = createCenterpiece();
   centerpiece.position.set(0, 1.1, -3.5);
   world.scene.add(centerpiece);
+  
+  const centerpieceEntity: Entity = {
+    mesh: centerpiece,
+    position: centerpiece.position,
+    rotation: centerpiece.rotation,
+    velocity: new THREE.Vector3(),
+    type: 'knockable',
+    data: { knocked: false }
+  };
+  world.addEntity('table_centerpiece', centerpieceEntity);
+  
+  // Add physics body for centerpiece (vase with flowers - medium-heavy)
+  if (physics.isReady()) {
+    const rapierWorld = physics.getWorld();
+    if (rapierWorld) {
+      const handle = createDynamicCylinderCollider(
+        rapierWorld,
+        0.1, // radius
+        0.15, // half height
+        centerpiece.position,
+        centerpiece.rotation,
+        2.0 // Medium-heavy density for vase
+      );
+      centerpieceEntity.physicsBody = handle.rigidBody;
+      physics.registerRigidBody('table_centerpiece', handle.rigidBody, handle.collider);
+    }
+  }
   
   // Add place settings at each seat
   const placeSettingPositions = [
@@ -711,32 +845,105 @@ function addDiningArea(world: World): void {
     { x: 0, z: -2.8 }      // Front
   ];
   
-  placeSettingPositions.forEach(pos => {
+  placeSettingPositions.forEach((pos, index) => {
     // Placemat
     const placemat = createPlacemat();
     placemat.position.set(pos.x, 1.06, pos.z);
     world.scene.add(placemat);
     
-    // Wine glass
+    // Wine glass - make it knockable!
     const glass = createWineGlass();
     glass.position.set(pos.x + 0.12, 1.07, pos.z + 0.08);
     world.scene.add(glass);
     
-    // Cutlery
+    const glassEntity: Entity = {
+      mesh: glass,
+      position: glass.position,
+      rotation: glass.rotation,
+      velocity: new THREE.Vector3(),
+      type: 'knockable',
+      data: { knocked: false }
+    };
+    const glassId = `wine_glass_${index}`;
+    world.addEntity(glassId, glassEntity);
+    
+    // Add physics body for wine glass (very light - fragile)
+    if (physics.isReady()) {
+      const rapierWorld = physics.getWorld();
+      if (rapierWorld) {
+        const handle = createDynamicCylinderCollider(
+          rapierWorld,
+          0.04, // small radius
+          0.08, // half height
+          glass.position,
+          glass.rotation,
+          0.3 // Very light density for glass
+        );
+        glassEntity.physicsBody = handle.rigidBody;
+        physics.registerRigidBody(glassId, handle.rigidBody, handle.collider);
+      }
+    }
+    
+    // Cutlery - make it knockable!
     const cutlery = createCutlerySet();
     cutlery.position.set(pos.x, 1.07, pos.z);
     world.scene.add(cutlery);
+    
+    const cutleryEntity: Entity = {
+      mesh: cutlery,
+      position: cutlery.position,
+      rotation: cutlery.rotation,
+      velocity: new THREE.Vector3(),
+      type: 'knockable',
+      data: { knocked: false }
+    };
+    const cutleryId = `cutlery_${index}`;
+    world.addEntity(cutleryId, cutleryEntity);
+    
+    // Add physics body for cutlery (light weight - thin metal)
+    if (physics.isReady()) {
+      const rapierWorld = physics.getWorld();
+      if (rapierWorld) {
+        const handle = createDynamicBoxCollider(
+          rapierWorld,
+          new THREE.Vector3(0.15, 0.02, 0.08), // small flat box
+          cutlery.position,
+          cutlery.rotation
+        );
+        // Set lighter density for cutlery
+        if (handle.rigidBody && handle.rigidBody.setAdditionalMass) {
+          handle.rigidBody.setAdditionalMass(0.05, true);
+        }
+        cutleryEntity.physicsBody = handle.rigidBody;
+        physics.registerRigidBody(cutleryId, handle.rigidBody, handle.collider);
+      }
+    }
   });
 }
 
 /**
  * Kitchen area with counters, cabinets, appliances
  */
-function addKitchenArea(world: World): void {
+function addKitchenArea(world: World, physics: PhysicsSystem): void {
   // Counter along right wall - positioned in kitchen tile zone
   const counter = createCounter();
   counter.position.set(6.5, 0, 0);
   world.scene.add(counter);
+  
+  // Add physics collider for counter
+  if (physics.isReady()) {
+    const rapierWorld = physics.getWorld();
+    if (rapierWorld) {
+      const handle = createFixedBoxCollider(
+        rapierWorld,
+        1,
+        0.95,
+        4,
+        new THREE.Vector3(6.5, 0.475, 0)
+      );
+      physics.registerRigidBody('counter_collider', handle.rigidBody, handle.collider);
+    }
+  }
   
   // Upper cabinets
   const upperCabinet = createUpperCabinet();
@@ -747,6 +954,21 @@ function addKitchenArea(world: World): void {
   const fridge = createFridge();
   fridge.position.set(7, 0, -3.5);
   world.scene.add(fridge);
+  
+  // Add physics collider for fridge
+  if (physics.isReady()) {
+    const rapierWorld = physics.getWorld();
+    if (rapierWorld) {
+      const handle = createFixedBoxCollider(
+        rapierWorld,
+        0.8,
+        2,
+        0.8,
+        new THREE.Vector3(7, 1, -3.5)
+      );
+      physics.registerRigidBody('fridge_collider', handle.rigidBody, handle.collider);
+    }
+  }
   
   // Sink on counter
   const sink = createSink();
@@ -763,6 +985,21 @@ function addKitchenArea(world: World): void {
   waterCooler.position.set(5.5, 0, 5);
   world.scene.add(waterCooler);
   
+  // Add physics collider for water cooler
+  if (physics.isReady()) {
+    const rapierWorld = physics.getWorld();
+    if (rapierWorld) {
+      const handle = createFixedBoxCollider(
+        rapierWorld,
+        0.5,
+        1.2,
+        0.5,
+        new THREE.Vector3(5.5, 0.6, 5)
+      );
+      physics.registerRigidBody('water_cooler_collider', handle.rigidBody, handle.collider);
+    }
+  }
+  
   // Microwave on counter
   const microwave = createMicrowave();
   microwave.position.set(6.5, 1.15, -1);
@@ -777,28 +1014,172 @@ function addKitchenArea(world: World): void {
 /**
  * Decorative clutter: boxes, picture frames, plants, toys
  */
-function addDecorClusters(world: World): void {
-  // Stacked boxes in corner
+function addDecorClusters(world: World, physics: PhysicsSystem): void {
+  // Stacked boxes in corner - make them knockable!
   const boxStack = createBoxStack();
   boxStack.position.set(6.5, 0, -6);
   world.scene.add(boxStack);
   
+  // Each box in the stack should be knockable (they're grouped, but we can treat the whole stack as one)
+  const boxEntity: Entity = {
+    mesh: boxStack,
+    position: boxStack.position,
+    rotation: boxStack.rotation,
+    velocity: new THREE.Vector3(),
+    type: 'knockable',
+    data: { knocked: false }
+  };
+  world.addEntity('box_stack', boxEntity);
+  
+  // Add physics body for box stack (medium weight - cardboard boxes)
+  if (physics.isReady()) {
+    const rapierWorld = physics.getWorld();
+    if (rapierWorld) {
+      const handle = createDynamicBoxCollider(
+        rapierWorld,
+        new THREE.Vector3(0.4, 0.6, 0.4), // approximate size of stacked boxes
+        boxStack.position,
+        boxStack.rotation
+      );
+      // Set density for cardboard boxes
+      if (handle.rigidBody && handle.rigidBody.setAdditionalMass) {
+        handle.rigidBody.setAdditionalMass(1.5, true);
+      }
+      boxEntity.physicsBody = handle.rigidBody;
+      physics.registerRigidBody('box_stack', handle.rigidBody, handle.collider);
+    }
+  }
+  
   // Picture frames on walls
   addPictureFrames(world);
   
-  // Potted plants
+  // Potted plants - make them knockable!
   const plant1 = createPottedPlant();
   plant1.position.set(-6.5, 0, -6);
   world.scene.add(plant1);
+  
+  const plant1Entity: Entity = {
+    mesh: plant1,
+    position: plant1.position,
+    rotation: plant1.rotation,
+    velocity: new THREE.Vector3(),
+    type: 'knockable',
+    data: { knocked: false }
+  };
+  world.addEntity('potted_plant_1', plant1Entity);
+  
+  // Add physics body for plant 1 (heavy - pot with soil)
+  if (physics.isReady()) {
+    const rapierWorld = physics.getWorld();
+    if (rapierWorld) {
+      const handle = createDynamicCylinderCollider(
+        rapierWorld,
+        0.2, // radius
+        0.25, // half height
+        plant1.position,
+        plant1.rotation,
+        3.0 // Heavy density for plant pot
+      );
+      plant1Entity.physicsBody = handle.rigidBody;
+      physics.registerRigidBody('potted_plant_1', handle.rigidBody, handle.collider);
+    }
+  }
   
   const plant2 = createPottedPlant();
   plant2.position.set(3, 0, 6);
   world.scene.add(plant2);
   
-  // Toy pile
+  const plant2Entity: Entity = {
+    mesh: plant2,
+    position: plant2.position,
+    rotation: plant2.rotation,
+    velocity: new THREE.Vector3(),
+    type: 'knockable',
+    data: { knocked: false }
+  };
+  world.addEntity('potted_plant_2', plant2Entity);
+  
+  // Add physics body for plant 2
+  if (physics.isReady()) {
+    const rapierWorld = physics.getWorld();
+    if (rapierWorld) {
+      const handle = createDynamicCylinderCollider(
+        rapierWorld,
+        0.2,
+        0.25,
+        plant2.position,
+        plant2.rotation,
+        3.0
+      );
+      plant2Entity.physicsBody = handle.rigidBody;
+      physics.registerRigidBody('potted_plant_2', handle.rigidBody, handle.collider);
+    }
+  }
+  
+  // Toy pile - make individual toys knockable!
   const toyPile = createToyPile();
   toyPile.position.set(-2, 0, 5.5);
   world.scene.add(toyPile);
+  
+  // Add physics to each toy in the pile
+  toyPile.children.forEach((toy, index) => {
+    const worldPos = new THREE.Vector3();
+    toy.getWorldPosition(worldPos);
+    
+    const toyEntity: Entity = {
+      mesh: toy as THREE.Mesh,
+      position: worldPos,
+      rotation: toy.rotation,
+      velocity: new THREE.Vector3(),
+      type: 'knockable',
+      data: { knocked: false }
+    };
+    const toyId = `toy_${index}`;
+    world.addEntity(toyId, toyEntity);
+    
+    // Add physics body for each toy (very light - plastic toys)
+    if (physics.isReady()) {
+      const rapierWorld = physics.getWorld();
+      if (rapierWorld) {
+        let handle;
+        // Determine shape based on toy geometry
+        const geometry = (toy as THREE.Mesh).geometry;
+        if (geometry.type === 'SphereGeometry') {
+          handle = createDynamicSphereCollider(
+            rapierWorld,
+            0.1,
+            worldPos
+          );
+          // Set density manually
+          if (handle.rigidBody && handle.rigidBody.setAdditionalMass) {
+            handle.rigidBody.setAdditionalMass(0.2, true);
+          }
+        } else if (geometry.type === 'BoxGeometry') {
+          handle = createDynamicBoxCollider(
+            rapierWorld,
+            new THREE.Vector3(0.075, 0.075, 0.075),
+            worldPos,
+            toy.rotation
+          );
+          if (handle.rigidBody && handle.rigidBody.setAdditionalMass) {
+            handle.rigidBody.setAdditionalMass(0.2, true);
+          }
+        } else {
+          // Cylinder or other shape
+          handle = createDynamicCylinderCollider(
+            rapierWorld,
+            0.08,
+            0.075,
+            worldPos,
+            toy.rotation,
+            0.2
+          );
+        }
+        toyEntity.physicsBody = handle.rigidBody;
+        physics.registerRigidBody(toyId, handle.rigidBody, handle.collider);
+      }
+    }
+  });
 }
 
 // ============================================================================
@@ -1066,9 +1447,9 @@ function createCenterpiece(): THREE.Group {
       createToonMaterial(flowerColors[i])
     );
     flower.position.set(
-      (Math.random() - 0.5) * 0.1,
-      0.15 + Math.random() * 0.1,
-      (Math.random() - 0.5) * 0.1
+      (getRandom() - 0.5) * 0.1,
+      0.15 + getRandom() * 0.1,
+      (getRandom() - 0.5) * 0.1
     );
     group.add(flower);
   }
@@ -1669,10 +2050,10 @@ export function addInteractables(world: World, physics: PhysicsSystem): void {
   addKnockablePlant(world, physics);
 }
 
-function addDiningTableItems(world: World, _physics: PhysicsSystem): void {
+function addDiningTableItems(world: World, physics: PhysicsSystem): void {
   const tableY = 1.15;
   
-  // Plates
+  // Plates (light - should move easily)
   const platePositions = [
     { x: 1, z: -3.4 },
     { x: 3, z: -3.4 },
@@ -1698,10 +2079,28 @@ function addDiningTableItems(world: World, _physics: PhysicsSystem): void {
       type: 'knockable',
       data: { knocked: false }
     };
-    world.addEntity(`plate_${index}`, entity);
+    const entityId = `plate_${index}`;
+    world.addEntity(entityId, entity);
+    
+    // Register physics body if physics is ready
+    if (physics.isReady()) {
+      const rapierWorld = physics.getWorld();
+      if (rapierWorld) {
+        const handle = createDynamicCylinderCollider(
+          rapierWorld,
+          0.12,
+          0.02,
+          plate.position,
+          plate.rotation,
+          0.5 // Light density for plates
+        );
+        entity.physicsBody = handle.rigidBody; // Store on entity
+        physics.registerRigidBody(entityId, handle.rigidBody, handle.collider);
+      }
+    }
   });
   
-  // Cups
+  // Cups (medium weight)
   const cupPositions = [
     { x: 1.3, z: -3.3 },
     { x: 3.3, z: -3.3 },
@@ -1726,10 +2125,28 @@ function addDiningTableItems(world: World, _physics: PhysicsSystem): void {
       type: 'knockable',
       data: { knocked: false }
     };
-    world.addEntity(`cup_${index}`, entity);
+    const entityId = `cup_${index}`;
+    world.addEntity(entityId, entity);
+    
+    // Register physics body if physics is ready
+    if (physics.isReady()) {
+      const rapierWorld = physics.getWorld();
+      if (rapierWorld) {
+        const handle = createDynamicCylinderCollider(
+          rapierWorld,
+          0.055,
+          0.12,
+          cup.position,
+          cup.rotation,
+          1.0 // Medium density for cups
+        );
+        entity.physicsBody = handle.rigidBody; // Store on entity
+        physics.registerRigidBody(entityId, handle.rigidBody, handle.collider);
+      }
+    }
   });
   
-  // Wine bottles on table
+  // Wine bottles on table (heavier - should resist more)
   const bottlePositions = [
     { x: 0.7, z: -3 },
     { x: 2.3, z: -3 }
@@ -1748,12 +2165,30 @@ function addDiningTableItems(world: World, _physics: PhysicsSystem): void {
       type: 'knockable',
       data: { knocked: false }
     };
-    world.addEntity(`bottle_${index}`, entity);
+    const entityId = `bottle_${index}`;
+    world.addEntity(entityId, entity);
+    
+    // Register physics body if physics is ready
+    if (physics.isReady()) {
+      const rapierWorld = physics.getWorld();
+      if (rapierWorld) {
+        const handle = createDynamicCylinderCollider(
+          rapierWorld,
+          0.04,
+          0.2,
+          bottle.position,
+          bottle.rotation,
+          2.5 // Higher density for bottles - harder to push
+        );
+        entity.physicsBody = handle.rigidBody; // Store on entity
+        physics.registerRigidBody(entityId, handle.rigidBody, handle.collider);
+      }
+    }
   });
 }
 
-function addKitchenShelfItems(world: World, _physics: PhysicsSystem): void {
-  // A couple small jars on the counter (knockable)
+function addKitchenShelfItems(world: World, physics: PhysicsSystem): void {
+  // A couple small jars on the counter (medium weight - knockable)
   const jarPositions = [
     { x: 5.5, y: 1.05, z: 1.5 },
     { x: 5.8, y: 1.05, z: 3 }
@@ -1777,7 +2212,25 @@ function addKitchenShelfItems(world: World, _physics: PhysicsSystem): void {
       type: 'knockable',
       data: { knocked: false }
     };
-    world.addEntity(`jar_${index}`, entity);
+    const entityId = `jar_${index}`;
+    world.addEntity(entityId, entity);
+    
+    // Register physics body if physics is ready
+    if (physics.isReady()) {
+      const rapierWorld = physics.getWorld();
+      if (rapierWorld) {
+        const handle = createDynamicCylinderCollider(
+          rapierWorld,
+          0.08,
+          0.12,
+          jar.position,
+          jar.rotation,
+          1.5 // Medium density for jars
+        );
+        entity.physicsBody = handle.rigidBody; // Store on entity
+        physics.registerRigidBody(entityId, handle.rigidBody, handle.collider);
+      }
+    }
   });
 }
 
@@ -1833,7 +2286,7 @@ function addScratchingPost(world: World, _physics: PhysicsSystem): void {
   world.addEntity('scratching_post', entity);
 }
 
-function addKnockablePlant(world: World, _physics: PhysicsSystem): void {
+function addKnockablePlant(world: World, physics: PhysicsSystem): void {
   const plantGroup = new THREE.Group();
   
   // Small pot
@@ -1864,7 +2317,25 @@ function addKnockablePlant(world: World, _physics: PhysicsSystem): void {
     type: 'knockable',
     data: { knocked: false }
   };
-  world.addEntity('plant_pot', entity);
+  const entityId = 'plant_pot';
+  world.addEntity(entityId, entity);
+  
+  // Register physics body if physics is ready (heavier - pot with soil)
+  if (physics.isReady()) {
+    const rapierWorld = physics.getWorld();
+    if (rapierWorld) {
+      const handle = createDynamicCylinderCollider(
+        rapierWorld,
+        0.11,
+        0.3,
+        plantGroup.position,
+        plantGroup.rotation,
+        3.0 // Higher density for plant pot - harder to push
+      );
+      entity.physicsBody = handle.rigidBody; // Store on entity
+      physics.registerRigidBody(entityId, handle.rigidBody, handle.collider);
+    }
+  }
 }
 
 function createBottle(): THREE.Group {

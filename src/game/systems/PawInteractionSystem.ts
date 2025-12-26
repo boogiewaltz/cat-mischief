@@ -227,18 +227,23 @@ export class PawInteractionSystem {
   private handleKnock(target: Entity, event: PawSwipeEvent): void {
     if (!target.data) target.data = {};
 
-    // Apply impulse via Rapier if physics body exists
-    if (target.physicsBody && this.physics) {
+    // Get entity ID for this target
+    const entityId = this.getEntityId(target);
+    
+    // Apply impulse via Rapier physics
+    if (entityId && this.physics && this.physics.isReady()) {
       const impulseStrength = 5.0;
       const impulse = event.direction.clone().multiplyScalar(impulseStrength);
       impulse.y += 2.5; // Add upward component
       
-      target.physicsBody.applyImpulse(
-        { x: impulse.x, y: impulse.y, z: impulse.z },
-        true
-      );
+      this.physics.applyImpulse(entityId, {
+        x: impulse.x,
+        y: impulse.y,
+        z: impulse.z
+      });
     } else {
-      // Fallback for entities without physics bodies
+      // Fallback for entities without physics bodies (shouldn't happen with Rapier)
+      console.warn('[PawInteraction] No physics body found for entity:', entityId);
       if (!target.velocity) target.velocity = new THREE.Vector3();
       const impulse = event.direction.clone().multiplyScalar(8);
       impulse.y = 3;
@@ -302,6 +307,14 @@ export class PawInteractionSystem {
   }
 
   private getNpcId(entity: Entity): string | null {
+    // Find the entity ID from the world
+    for (const [id, ent] of this.world.getAllEntities()) {
+      if (ent === entity) return id;
+    }
+    return null;
+  }
+  
+  private getEntityId(entity: Entity): string | null {
     // Find the entity ID from the world
     for (const [id, ent] of this.world.getAllEntities()) {
       if (ent === entity) return id;

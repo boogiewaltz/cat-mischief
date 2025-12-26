@@ -50,8 +50,8 @@ export class Game {
     // Initialize systems
     this.systems = {
       input: new InputSystem(),
-      physics: new PhysicsSystem(),
-      player: new PlayerSystem(this.world, new PhysicsSystem()), // Temporary placeholder
+      physics: new PhysicsSystem(this.world),
+      player: new PlayerSystem(this.world, new PhysicsSystem(this.world)), // Will be replaced after physics init
       npc: new NpcSystem(this.world),
       camera: new CameraSystem(this.world),
       animation: new AnimationSystem(),
@@ -103,8 +103,34 @@ export class Game {
     if (this.isRunning) return;
     
     this.isRunning = true;
-    this.world.initialize(this.systems.physics);
+    this.initializeWorld();
+  }
+
+  private async initializeWorld(): Promise<void> {
+    // Wait for physics to initialize
+    await this.waitForPhysics();
+    
+    // Now initialize world with physics ready
+    await this.world.initialize(this.systems.physics);
+    
+    // Start animation loop
     this.animate();
+  }
+
+  private async waitForPhysics(): Promise<void> {
+    // Wait up to 5 seconds for physics to be ready
+    const maxWait = 5000;
+    const startTime = Date.now();
+    
+    while (!this.systems.physics.isReady() && (Date.now() - startTime) < maxWait) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    
+    if (!this.systems.physics.isReady()) {
+      console.error('[Game] Physics failed to initialize in time');
+    } else {
+      console.log('[Game] Physics ready, initializing world');
+    }
   }
 
   private animate = (): void => {
@@ -160,7 +186,7 @@ export class Game {
     // Sync all dynamic entities from their rigidbodies
     for (const [, entity] of this.world.getAllEntities()) {
       if (entity.type === 'knockable' && entity.physicsBody) {
-        this.systems.physics.syncEntityToRigidBody(entity, entity.physicsBody);
+        this.systems.physics.syncEntityFromRigidBody(entity, entity.physicsBody);
       }
     }
   }

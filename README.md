@@ -29,6 +29,18 @@ npm run preview
 
 ## Testing
 
+### Quality Assurance Workflow
+
+Run all quality gates locally before committing:
+```bash
+npm run qa
+```
+
+This command runs:
+1. **Typecheck**: `tsc --noEmit` - Catch TypeScript errors
+2. **Build**: `vite build` - Verify production build works
+3. **E2E Tests**: Playwright smoke tests with screenshots
+
 ### Automated E2E Tests
 ```bash
 npm run test:e2e        # Run tests headless
@@ -37,9 +49,24 @@ npm run test:e2e:debug  # Debug tests
 ```
 
 ### Test Mode (Deterministic)
-For reproducible testing and screenshots, append `?test=1` or `?seed=12345` to the URL:
+
+For reproducible testing and bug reports, use test mode with a specific seed:
+
 - `http://localhost:3000/?test=1` - Uses default seed (12345)
 - `http://localhost:3000/?seed=99999` - Uses custom seed
+
+**Why use test mode?**
+- Deterministic scene generation (same decor placement every time)
+- Deterministic NPC behavior (same random patterns)
+- Reproducible screenshots for regression testing
+- Makes bugs easier to reproduce and fix
+
+**How to reproduce a bug deterministically:**
+1. Load game in test mode: `?test=1&seed=12345`
+2. Perform the steps that trigger the bug
+3. Press F3 to see exact player position
+4. Take screenshot (or note console errors)
+5. Report bug with seed and steps in [BUG_REPORT.md](./BUG_REPORT.md)
 
 ## Features (MVP)
 
@@ -130,13 +157,13 @@ Before each release, manually verify:
 ## Tech Stack
 
 - Three.js (3D rendering)
+- Rapier3D (physics simulation)
 - TypeScript
 - Vite (build tool)
 - Playwright (E2E testing)
 
 ## Known Limitations
 
-- Simple physics (not using Rapier3D yet - velocity-based only)
 - No audio yet (AudioSystem exists but no sound files)
 - Basic procedural cat model (no external 3D model)
 - Single room only
